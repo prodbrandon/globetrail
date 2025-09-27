@@ -93,7 +93,6 @@ export default function RotatingEarth({ className = "" }: RotatingEarthProps) {
       )
       
       if (connectionExists || prev.length >= MAX_CONNECTIONS) {
-        console.log('Connection blocked:', { connectionExists, maxReached: prev.length >= MAX_CONNECTIONS })
         return prev
       }
       
@@ -105,10 +104,9 @@ export default function RotatingEarth({ className = "" }: RotatingEarthProps) {
         from,
         to,
         pathPoints,
-        animationProgress: 0
+        animationProgress: 0.01 // Start with small progress to ensure immediate visibility
       }
 
-      console.log('Adding connection:', newConnection)
       return [...prev, newConnection]
     })
   }, [computeFlightPath])
@@ -172,63 +170,52 @@ export default function RotatingEarth({ className = "" }: RotatingEarthProps) {
       context.stroke()
 
       // Draw all connections
-      if (connections.length > 0) {
-        console.log('Rendering connections:', connections.length)
-      }
-      
       connections.forEach((connection, index) => {
         const visiblePoints = connection.pathPoints
           .map((point) => projection(point))
           .filter((point) => point !== null)
-
-        console.log(`Connection ${index}: ${visiblePoints.length} visible points, progress: ${connection.animationProgress}`)
 
         if (visiblePoints.length > 1) {
           // Different colors for different connections
           const colors = ["#00ff88", "#ff6b6b", "#ffd93d"]
           const color = colors[index % colors.length]
 
-          // Draw full path (faded)
+          // Always draw the full path first (static background)
           context.beginPath()
-          visiblePoints.forEach((point, i) => {
-            if (i === 0) {
-              context.moveTo(point![0], point![1])
-            } else {
-              context.lineTo(point![0], point![1])
-            }
-          })
+          context.moveTo(visiblePoints[0]![0], visiblePoints[0]![1])
+          for (let i = 1; i < visiblePoints.length; i++) {
+            context.lineTo(visiblePoints[i]![0], visiblePoints[i]![1])
+          }
           context.strokeStyle = color
-          context.lineWidth = 3 * scaleFactor
-          context.globalAlpha = 0.3
+          context.lineWidth = 2 * scaleFactor
+          context.globalAlpha = 0.4
           context.stroke()
           context.globalAlpha = 1
 
-          // Draw animated portion
-          const animatedLength = Math.floor(visiblePoints.length * connection.animationProgress)
-          if (animatedLength > 1) {
+          // Draw animated portion (brighter)
+          const animatedLength = Math.max(2, Math.floor(visiblePoints.length * connection.animationProgress))
+          if (animatedLength >= 2) {
             context.beginPath()
-            for (let i = 0; i < animatedLength; i++) {
-              const point = visiblePoints[i]
-              if (i === 0) {
-                context.moveTo(point![0], point![1])
-              } else {
-                context.lineTo(point![0], point![1])
-              }
+            context.moveTo(visiblePoints[0]![0], visiblePoints[0]![1])
+            for (let i = 1; i < Math.min(animatedLength, visiblePoints.length); i++) {
+              context.lineTo(visiblePoints[i]![0], visiblePoints[i]![1])
             }
             context.strokeStyle = color
-            context.lineWidth = 4 * scaleFactor
+            context.lineWidth = 3 * scaleFactor
+            context.globalAlpha = 0.9
             context.stroke()
+            context.globalAlpha = 1
 
-            // Draw moving point
+            // Draw moving point at the end of animated portion
             if (animatedLength < visiblePoints.length) {
-              const currentPoint = visiblePoints[animatedLength - 1]
+              const currentPoint = visiblePoints[Math.min(animatedLength - 1, visiblePoints.length - 1)]
               if (currentPoint) {
                 context.beginPath()
-                context.arc(currentPoint[0], currentPoint[1], 6 * scaleFactor, 0, 2 * Math.PI)
-                context.fillStyle = "#ffffff"
+                context.arc(currentPoint[0], currentPoint[1], 4 * scaleFactor, 0, 2 * Math.PI)
+                context.fillStyle = color
                 context.fill()
-                context.strokeStyle = color
-                context.lineWidth = 2 * scaleFactor
+                context.strokeStyle = "#ffffff"
+                context.lineWidth = 1 * scaleFactor
                 context.stroke()
               }
             }
