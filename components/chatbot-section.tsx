@@ -1,11 +1,11 @@
 "use client"
 
 import type React from "react"
-import { useState } from "react"
+import { useState, useRef, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Send, Bot, User, Globe, Loader2, Plane, Hotel, MapPin, Utensils } from "lucide-react"
+import { Send, Bot, User, Globe, Loader2, Plane, Hotel, MapPin, Utensils, ChevronDown } from "lucide-react"
 
 interface Message {
   id: string
@@ -88,6 +88,9 @@ export default function ChatbotSection() {
   ])
   const [inputValue, setInputValue] = useState("")
   const [isTyping, setIsTyping] = useState(false)
+  const [showScrollButton, setShowScrollButton] = useState(false)
+  const scrollAreaRef = useRef<HTMLDivElement>(null)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const handleSendMessage = async () => {
     if (!inputValue.trim() || isTyping) return
@@ -122,10 +125,10 @@ export default function ChatbotSection() {
       }
 
       const result = await response.json();
-      
+
       if (result.success && result.data) {
         const formattedContent = formatTravelResponse(result.data);
-        
+
         const botMessage: Message = {
           id: (Date.now() + 1).toString(),
           content: formattedContent,
@@ -139,9 +142,9 @@ export default function ChatbotSection() {
       }
     } catch (error) {
       console.error('Error calling API:', error);
-      
+
       let errorMessage = "I'm having trouble connecting to my travel services right now. ";
-      
+
       if (error instanceof Error) {
         if (error.message.includes('Failed to fetch')) {
           errorMessage += "Please make sure the backend server is running on localhost:8000.\n\nTo start the backend:\n1. cd backend/\n2. python main.py";
@@ -153,7 +156,7 @@ export default function ChatbotSection() {
       } else {
         errorMessage += "Please try again in a moment.";
       }
-      
+
       const errorBotMessage: Message = {
         id: (Date.now() + 1).toString(),
         content: errorMessage,
@@ -173,17 +176,36 @@ export default function ChatbotSection() {
     }
   }
 
+  // Scroll to bottom function
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+  }
+
+  // Check if user is near bottom of scroll area
+  const handleScroll = (event: React.UIEvent<HTMLDivElement>) => {
+    const { scrollTop, scrollHeight, clientHeight } = event.currentTarget
+    const isNearBottom = scrollHeight - scrollTop - clientHeight < 100
+    setShowScrollButton(!isNearBottom)
+  }
+
+  // Auto-scroll to bottom when new messages are added
+  useEffect(() => {
+    if (!showScrollButton) {
+      scrollToBottom()
+    }
+  }, [messages, isTyping, showScrollButton])
+
   // Format travel response data into readable text
   const formatTravelResponse = (data: TravelData): string => {
     if (!data) return "I couldn't find any travel information for your request.";
-    
+
     let response = "";
-    
+
     // Add recommendations if available
     if (data.recommendations) {
       response += `🎯 **Travel Recommendations:**\n${data.recommendations}\n\n`;
     }
-    
+
     // Add travel request summary
     if (data.request) {
       response += `📋 **Trip Summary:**\n`;
@@ -196,7 +218,7 @@ export default function ChatbotSection() {
       if (data.request.budget) response += `• Budget: ${data.request.budget}\n`;
       response += `\n`;
     }
-    
+
     // Add data summary with proper null checks
     if (data.raw_data) {
       if (data.raw_data.flights && data.raw_data.flights.length > 0) {
@@ -212,16 +234,16 @@ export default function ChatbotSection() {
         response += `🍽️ **Found ${data.raw_data.restaurants.length} restaurants**\n`;
       }
     }
-    
+
     if (!response.trim()) {
       response = "I found some travel options for you! The detailed results are displayed below.";
     }
-    
+
     return response.trim();
   }
 
   return (
-    <div className="h-full flex flex-col bg-gradient-to-b from-black via-gray-900 to-black relative">
+    <div className="h-full bg-gradient-to-b from-black via-gray-900 to-black relative">
       <div
         className="absolute inset-0 opacity-5"
         style={{
@@ -233,6 +255,7 @@ export default function ChatbotSection() {
         }}
       ></div>
 
+      {/* Fixed Header */}
       <div className="relative z-10 p-6 border-b border-gray-700/50 bg-black/20 backdrop-blur-sm">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-full bg-transparent border-2 border-white/30 flex items-center justify-center">
@@ -245,77 +268,95 @@ export default function ChatbotSection() {
         </div>
       </div>
 
-      <ScrollArea className="flex-1 p-6 relative z-10">
-        <div className="space-y-4">
-          {messages.map((message) => (
-            <div
-              key={message.id}
-              className={`flex gap-3 ${message.sender === "user" ? "justify-end" : "justify-start"}`}
-            >
-              {message.sender === "bot" && (
-                <div className="w-8 h-8 rounded-full bg-transparent border border-white/30 flex items-center justify-center flex-shrink-0">
-                  <Bot className="w-4 h-4 text-white" />
-                </div>
-              )}
+      {/* Messages Area - positioned absolutely to fill space between header and input */}
+      <div className="absolute top-[120px] bottom-[100px] left-0 right-0 z-10">
+        <ScrollArea className="h-full p-6" onScrollCapture={handleScroll} ref={scrollAreaRef}>
+          <div className="space-y-4 pb-4">
+            {messages.map((message) => (
               <div
-                className={`max-w-[85%] p-3 rounded-lg border font-mono text-sm ${
-                  message.sender === "user"
-                    ? "bg-white/10 border-white/20 text-white backdrop-blur-sm"
-                    : "bg-black/40 border-gray-700/50 text-gray-100 backdrop-blur-sm"
-                }`}
+                key={message.id}
+                className={`flex gap-3 ${message.sender === "user" ? "justify-end" : "justify-start"}`}
               >
-                <div className="whitespace-pre-wrap">{message.content}</div>
-                
-                {/* Show structured travel data if available */}
-                {message.data && message.sender === "bot" && (
-                  <div className="mt-4 pt-4 border-t border-gray-600/30">
-                    <TravelDataDisplay data={message.data} />
+                {message.sender === "bot" && (
+                  <div className="w-8 h-8 rounded-full bg-transparent border border-white/30 flex items-center justify-center flex-shrink-0">
+                    <Bot className="w-4 h-4 text-white" />
                   </div>
                 )}
-                
-                <p className="text-xs opacity-70 mt-2 font-mono">
-                  {message.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                </p>
-              </div>
-              {message.sender === "user" && (
-                <div className="w-8 h-8 rounded-full bg-transparent border border-white/30 flex items-center justify-center flex-shrink-0">
-                  <User className="w-4 h-4 text-white" />
+                <div
+                  className={`max-w-[85%] p-3 rounded-lg border font-mono text-sm ${message.sender === "user"
+                    ? "bg-white/10 border-white/20 text-white backdrop-blur-sm"
+                    : "bg-black/40 border-gray-700/50 text-gray-100 backdrop-blur-sm"
+                    }`}
+                >
+                  <div className="whitespace-pre-wrap">{message.content}</div>
+
+                  {/* Show structured travel data if available */}
+                  {message.data && message.sender === "bot" && (
+                    <div className="mt-4 pt-4 border-t border-gray-600/30">
+                      <TravelDataDisplay data={message.data} />
+                    </div>
+                  )}
+
+                  <p className="text-xs opacity-70 mt-2 font-mono">
+                    {message.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
                 </div>
-              )}
-            </div>
-          ))}
-          {isTyping && (
-            <div className="flex gap-3 justify-start">
-              <div className="w-8 h-8 rounded-full bg-transparent border border-white/30 flex items-center justify-center flex-shrink-0">
-                <Loader2 className="w-4 h-4 text-white animate-spin" />
+                {message.sender === "user" && (
+                  <div className="w-8 h-8 rounded-full bg-transparent border border-white/30 flex items-center justify-center flex-shrink-0">
+                    <User className="w-4 h-4 text-white" />
+                  </div>
+                )}
               </div>
-              <div className="bg-black/40 border border-gray-700/50 text-gray-100 p-3 rounded-lg backdrop-blur-sm">
-                <div className="flex gap-2 items-center">
-                  <span className="text-xs opacity-70">Searching travel options</span>
-                  <div className="flex gap-1">
-                    <div className="w-1 h-1 bg-white/60 rounded-full animate-bounce"></div>
-                    <div
-                      className="w-1 h-1 bg-white/60 rounded-full animate-bounce"
-                      style={{ animationDelay: "0.1s" }}
-                    ></div>
-                    <div
-                      className="w-1 h-1 bg-white/60 rounded-full animate-bounce"
-                      style={{ animationDelay: "0.2s" }}
-                    ></div>
+            ))}
+            {isTyping && (
+              <div className="flex gap-3 justify-start">
+                <div className="w-8 h-8 rounded-full bg-transparent border border-white/30 flex items-center justify-center flex-shrink-0">
+                  <Loader2 className="w-4 h-4 text-white animate-spin" />
+                </div>
+                <div className="bg-black/40 border border-gray-700/50 text-gray-100 p-3 rounded-lg backdrop-blur-sm">
+                  <div className="flex gap-2 items-center">
+                    <span className="text-xs opacity-70">Searching travel options</span>
+                    <div className="flex gap-1">
+                      <div className="w-1 h-1 bg-white/60 rounded-full animate-bounce"></div>
+                      <div
+                        className="w-1 h-1 bg-white/60 rounded-full animate-bounce"
+                        style={{ animationDelay: "0.1s" }}
+                      ></div>
+                      <div
+                        className="w-1 h-1 bg-white/60 rounded-full animate-bounce"
+                        style={{ animationDelay: "0.2s" }}
+                      ></div>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          )}
-        </div>
-      </ScrollArea>
+            )}
+            {/* Invisible element to scroll to */}
+            <div ref={messagesEndRef} />
+          </div>
+        </ScrollArea>
 
-      <div className="relative z-10 p-6 border-t border-gray-700/50 bg-black/20 backdrop-blur-sm">
+        {/* Scroll to Bottom Button */}
+        {showScrollButton && (
+          <div className="absolute bottom-4 right-4 z-20">
+            <Button
+              onClick={scrollToBottom}
+              size="sm"
+              className="w-10 h-10 rounded-full bg-black/60 border border-white/30 hover:bg-black/80 text-white backdrop-blur-sm shadow-lg transition-all duration-200 hover:scale-105"
+            >
+              <ChevronDown className="w-4 h-4" />
+            </Button>
+          </div>
+        )}
+      </div>
+
+      {/* Fixed Input Area at Bottom */}
+      <div className="absolute bottom-0 left-0 right-0 z-10 p-6 border-t border-gray-700/50 bg-black/20 backdrop-blur-sm">
         <div className="flex gap-2">
           <Input
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
-            onKeyPress={handleKeyPress}
+            onKeyDown={handleKeyPress}
             placeholder="// query the planet..."
             className="flex-1 bg-black/40 border-gray-700/50 text-white placeholder-gray-500 focus:border-white/30 font-mono backdrop-blur-sm"
             disabled={isTyping}
@@ -336,7 +377,7 @@ export default function ChatbotSection() {
 // Component to display structured travel data
 function TravelDataDisplay({ data }: { data: TravelData }) {
   const { raw_data } = data;
-  
+
   if (!raw_data) return null;
 
   return (
