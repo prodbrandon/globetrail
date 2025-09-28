@@ -19,6 +19,7 @@ load_dotenv()
 class FlightSearchRequest(BaseModel):
     message: str
     user_id: Optional[str] = None
+    locations: Optional[list] = None  # For multi-location searches from globe
 
 
 class FlightSearchResponse(BaseModel):
@@ -440,6 +441,78 @@ async def parse_enhanced_travel_request(user_input: str) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Failed to parse travel request: {str(e)}")
 
 
+async def parse_flight_request_with_locations(user_input: str, locations: list) -> Dict[str, Any]:
+    """Parse flight request with globe-selected locations"""
+    
+    gemini_key = os.getenv('GEMINI_API_KEY')
+    if not gemini_key:
+        raise HTTPException(status_code=500, detail="Gemini API key not configured")
+
+    genai.configure(api_key=gemini_key)
+    model = genai.GenerativeModel('gemini-2.5-flash')
+
+    # Create location context
+    location_names = [loc['name'] for loc in locations]
+    origin = locations[0]['name']
+    destination = locations[-1]['name']
+    
+    parse_prompt = f"""
+    Parse this flight request with selected locations: "{user_input}"
+    
+    Selected locations from globe: {location_names}
+    Origin: {origin}
+    Destination: {destination}
+
+    Extract these exact parameters for SERP API:
+    {{
+        "departure_id": "3-letter airport code for {origin}",
+        "arrival_id": "3-letter airport code for {destination}", 
+        "outbound_date": "YYYY-MM-DD",
+        "return_date": "YYYY-MM-DD or null",
+        "type": "1 or 2",
+        "adults": number,
+        "children": number,
+        "currency": "USD",
+        "hl": "en"
+    }}
+
+    Rules:
+    - departure_id/arrival_id: Convert cities to codes ({origin}->airport code, {destination}->airport code)
+    - Use common airport codes: LA/Los Angeles->LAX, Tokyo->NRT, NYC/New York->JFK, Paris->CDG, London->LHR, Boston->BOS, Dubai->DXB, Sydney->SYD, Singapore->SIN, Hong Kong->HKG, Mumbai->BOM, São Paulo->GRU, Cairo->CAI, Moscow->SVO, Mexico City->MEX, Cape Town->CPT
+    - type: "1" for round-trip, "2" for one-way (default to round-trip unless specified)
+    - return_date: null if one-way, calculate date if round-trip (default 7 days after outbound)
+    - outbound_date: use specified date or 30 days from today if not specified
+    - adults: extract number or default 1
+    - children: extract number or default 0
+    - currency: always "USD" 
+    - hl: always "en"
+
+    Return ONLY the JSON object, no other text.
+    """
+
+    try:
+        response = await asyncio.to_thread(model.generate_content, parse_prompt)
+
+        # Extract JSON from response
+        text = response.text.strip()
+        if text.startswith('```json'):
+            text = text[7:-3]
+        elif text.startswith('```'):
+            text = text[3:-3]
+
+        params = json.loads(text)
+        
+        # Add location metadata
+        params['selected_locations'] = locations
+        params['origin_city'] = origin
+        params['destination_city'] = destination
+        
+        return params
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to parse flight request with locations: {str(e)}")
+
+
 async def parse_flight_request(user_input: str) -> Dict[str, Any]:
     """Use Gemini to parse flight request into SERP API parameters (basic version)"""
 
@@ -671,7 +744,18 @@ async def search_flights(request: FlightSearchRequest):
 
     try:
         # Step 1: Parse the natural language request
-        extracted_params = await parse_flight_request(request.message)
+        # If locations are provided from globe, use them to enhance the parsing
+        if request.locations and len(request.locations) >= 2:
+            print(f"🌍 Globe locations provided: {[loc['name'] for loc in request.locations]}")
+            extracted_params = await parse_flight_request_with_locations(request.message, request.locations)
+        else:
+            extracted_params = await parse_flight_request(request.message)
+
+        # Step 1.5: Set default outbound_date if missing (30 days from now)
+        if not extracted_params.get('outbound_date'):
+            default_date = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d')
+            extracted_params['outbound_date'] = default_date
+            print(f"📅 Setting default outbound date to: {default_date}")
 
         # Step 2: Validate required parameters
         required_fields = ['departure_id', 'arrival_id', 'outbound_date']

@@ -1,9 +1,16 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useRef } from "react"
 import dynamic from "next/dynamic"
 import RotatingEarth from "@/components/rotating-earth"
 import ChatbotSection from "@/components/chatbot-section"
+
+interface City {
+  name: string
+  lng: number
+  lat: number
+  country: string
+}
 
 // Dynamically import the globe component with SSR disabled
 const ReactGlobeEarth = dynamic(() => import("@/components/react-globe-earth"), {
@@ -20,6 +27,13 @@ const ReactGlobeEarth = dynamic(() => import("@/components/react-globe-earth"), 
 
 export default function Home() {
   const [useReactGlobe] = useState(true)
+  const chatbotRef = useRef<{ handleFlightSearch: (locations: City[]) => void }>(null)
+
+  const handleFlightSearchFromGlobe = (locations: City[]) => {
+    if (chatbotRef.current) {
+      chatbotRef.current.handleFlightSearch(locations)
+    }
+  }
 
   return (
     <main className="h-screen bg-black flex overflow-hidden">
@@ -60,7 +74,10 @@ export default function Home() {
 
         {/* Globe Components */}
         {useReactGlobe ? (
-          <ReactGlobeEarth className="w-full h-full" />
+          <ReactGlobeEarth 
+            className="w-full h-full" 
+            onFlightSearch={handleFlightSearchFromGlobe}
+          />
         ) : (
           <div className="flex items-center justify-center w-full h-full">
             <RotatingEarth width={600} height={450} />
@@ -69,7 +86,7 @@ export default function Home() {
       </div>
 
       <div className="w-2/5 h-full flex flex-col">
-        <ChatbotSection />
+        <ChatbotSection ref={chatbotRef} />
       </div>
     </main>
   )

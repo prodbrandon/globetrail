@@ -22,6 +22,7 @@ interface ReactGlobeEarthProps {
     width?: number
     height?: number
     className?: string
+    onFlightSearch?: (locations: City[]) => void
 }
 
 // Major world cities data
@@ -46,7 +47,7 @@ const CITIES: City[] = [
 const MAX_CONNECTIONS = 3
 const CONNECTION_COLORS = ["#00ff88", "#ff6b6b", "#ffd93d"]
 
-export default function ReactGlobeEarth({ className = "" }: ReactGlobeEarthProps) {
+export default function ReactGlobeEarth({ className = "", onFlightSearch }: ReactGlobeEarthProps) {
     const globeRef = useRef<any>()
     const containerRef = useRef<HTMLDivElement>(null)
     const [selectedCities, setSelectedCities] = useState<City[]>([])
@@ -138,6 +139,12 @@ export default function ReactGlobeEarth({ className = "" }: ReactGlobeEarthProps
         setSelectedCities([])
         setConnections([])
     }, [])
+
+    const handleFlightSearch = useCallback(() => {
+        if (selectedCities.length >= 2 && onFlightSearch) {
+            onFlightSearch(selectedCities)
+        }
+    }, [selectedCities, onFlightSearch])
 
     const handleCityClick = useCallback((city: any) => {
         const clickedCity = CITIES.find(c => c.name === city.name)
@@ -303,6 +310,15 @@ export default function ReactGlobeEarth({ className = "" }: ReactGlobeEarthProps
                 >
                     {roundTripMode ? "Round Trip ✈️" : "One Way →"}
                 </button>
+
+                {selectedCities.length >= 2 && (
+                    <button
+                        onClick={handleFlightSearch}
+                        className="px-3 py-1 text-xs rounded-md bg-blue-600/80 text-white backdrop-blur hover:bg-blue-700/80 transition-colors animate-pulse"
+                    >
+                        Search Flights ✈️
+                    </button>
+                )}
 
                 <button
                     onClick={resetConnections}

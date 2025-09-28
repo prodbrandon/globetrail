@@ -3,7 +3,7 @@
 "use client"
 
 import type React from "react"
-import { useState, useRef, useEffect } from "react"
+import { useState, useRef, useEffect, forwardRef, useImperativeHandle } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -123,7 +123,18 @@ interface RestaurantData {
   price_range?: string
 }
 
-export default function ChatbotSection() {
+interface City {
+  name: string
+  lng: number
+  lat: number
+  country: string
+}
+
+interface ChatbotSectionRef {
+  handleFlightSearch: (locations: City[]) => void
+}
+
+const ChatbotSection = forwardRef<ChatbotSectionRef>((props, ref) => {
   // Keep all your existing state exactly as is
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -138,6 +149,114 @@ export default function ChatbotSection() {
   const [showScrollButton, setShowScrollButton] = useState(false)
   const scrollAreaRef = useRef<HTMLDivElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+
+  // Expose flight search functionality to parent component
+  useImperativeHandle(ref, () => ({
+    handleFlightSearch: (locations: City[]) => {
+      handleFlightSearchFromGlobe(locations)
+    }
+  }))
+
+  const handleFlightSearchFromGlobe = async (locations: City[]) => {
+    if (locations.length < 2) return
+
+    // Create a natural language query from the selected locations
+    const origin = locations[0]
+    const destination = locations[locations.length - 1] // Use last selected as destination
+    
+    let flightQuery = `Find flights from ${origin.name} to ${destination.name}`
+    
+    // If more than 2 locations, create a multi-city trip query
+    if (locations.length > 2) {
+      const intermediateStops = locations.slice(1, -1).map(city => city.name).join(', ')
+      flightQuery = `Multi-city trip: ${origin.name} → ${intermediateStops} → ${destination.name}`
+    }
+
+    // Add the query as a user message and trigger search
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      content: flightQuery,
+      sender: "user",
+      timestamp: new Date(),
+    }
+
+    setMessages((prev) => [...prev, userMessage])
+    setIsTyping(true)
+
+    try {
+      // Use the existing flight search logic
+      const searchIntent = analyzeSearchIntent(flightQuery)
+      
+      let flightsResult = null
+      if (searchIntent.needsFlights) {
+        const flightsResponse = await fetch('http://localhost:8000/api/flights/search', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            message: flightQuery,
+            user_id: "hackathon_user",
+            locations: locations // Pass the selected locations as metadata
+          })
+        })
+
+        if (flightsResponse.ok) {
+          flightsResult = await flightsResponse.json()
+        }
+      }
+
+      if (flightsResult?.success) {
+        const combinedData: TravelData = {
+          raw_data: {
+            flights: flightsResult.data.flights?.map((flight: any, index: number) => ({
+              id: flight.id || `flight_${index}`,
+              airline: flight.airline || 'Unknown Airline',
+              flight_number: flight.flight_number || '',
+              origin: flight.departure_code || '',
+              origin_name: flight.departure_name || '',
+              destination: flight.arrival_code || '',
+              destination_name: flight.arrival_name || '',
+              departure_time: flight.departure_time || '',
+              arrival_time: flight.arrival_time || '',
+              price: flight.price || 0,
+              currency: flight.currency || 'USD',
+              duration: flight.duration || '',
+              stops: flight.stops || 0,
+              category: index < 3 ? 'best' : 'other',
+              booking_options: flight.booking_options || []
+            })) || [],
+            hotels: [],
+            activities: [],
+            restaurants: []
+          }
+        }
+
+        const formattedContent = formatTravelResponse(combinedData)
+        const botMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          content: formattedContent,
+          sender: "bot",
+          timestamp: new Date(),
+          data: combinedData
+        }
+        setMessages((prev) => [...prev, botMessage])
+      } else {
+        throw new Error('Flight search failed')
+      }
+    } catch (error) {
+      console.error('Globe flight search error:', error)
+      const errorMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        content: `I couldn't find flights for your selected route. Please try using the chat to search for flights manually.`,
+        sender: "bot",
+        timestamp: new Date(),
+      }
+      setMessages((prev) => [...prev, errorMessage])
+    } finally {
+      setIsTyping(false)
+    }
+  }
 
   // ENHANCED: Fast keyword-based search intent analysis
   const analyzeSearchIntent = (message: string): {
@@ -834,7 +953,7 @@ export default function ChatbotSection() {
       </div>
     </div>
   )
-}
+})
 
 // Enhanced display components with expandable functionality
 function FlightDisplay({ flights, expanded, onToggle }: {
@@ -935,12 +1054,24 @@ function FlightDisplay({ flights, expanded, onToggle }: {
                       🌱 {flight.carbon_emissions.this_flight}
                     </span>
                   )}
+                  {flight.booking_options && flight.booking_options.length > 0 && (
+                    <span className="text-blue-300">
+                      📝 {flight.booking_options.length} booking option{flight.booking_options.length > 1 ? 's' : ''}
+                    </span>
+                  )}
                 </div>
-                {flight.booking_options && flight.booking_options.length > 0 && (
-                  <span className="text-blue-300">
-                    📝 {flight.booking_options.length} booking option{flight.booking_options.length > 1 ? 's' : ''}
-                  </span>
-                )}
+                <Button
+                  onClick={() => {
+                    const googleFlightsUrl = `https://www.google.com/travel/flights?q=${encodeURIComponent(
+                      `${originCode} to ${destCode} ${departureDate ? new Date(departureDateTime).toISOString().split('T')[0] : ''}`
+                    )}`;
+                    window.open(googleFlightsUrl, '_blank');
+                  }}
+                  size="sm"
+                  className="h-5 px-2 text-xs bg-gray-700/50 hover:bg-blue-600/80 text-gray-300 hover:text-white border border-gray-600/30 hover:border-blue-500/50 rounded transition-all duration-200"
+                >
+                  Book
+                </Button>
               </div>
 
               {flight.layovers && flight.layovers.length > 0 && (
@@ -1120,3 +1251,5 @@ function TravelDataDisplay({ data }: { data: TravelData }) {
     </div>
   );
 }
+
+export default ChatbotSection
