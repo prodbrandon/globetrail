@@ -215,7 +215,7 @@ const ChatbotSection = forwardRef<ChatbotSectionRef>((props, ref) => {
 
       let flightsResult = null
       if (searchIntent.needsFlights) {
-        const flightsResponse = await fetch('http://localhost:8000/api/flights/search', {
+        const flightsResponse = await fetch('https://globetrail-ysb8.onrender.com/api/flights/search', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -480,7 +480,7 @@ const ChatbotSection = forwardRef<ChatbotSectionRef>((props, ref) => {
         console.log('🤖 Non-travel query detected, using natural language response...');
 
         try {
-          const naturalResponse = await fetch('http://localhost:8000/api/chat/natural', {
+          const naturalResponse = await fetch('https://globetrail-ysb8.onrender.com/api/chat/natural', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -518,7 +518,7 @@ const ChatbotSection = forwardRef<ChatbotSectionRef>((props, ref) => {
 
       if (searchIntent.needsFlights) {
         console.log('🛫 Searching flights...')
-        const flightsResponse = await fetch('http://localhost:8000/api/flights/search', {
+        const flightsResponse = await fetch('https://globetrail-ysb8.onrender.com/api/flights/search', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -541,7 +541,7 @@ const ChatbotSection = forwardRef<ChatbotSectionRef>((props, ref) => {
       if (searchIntent.needsHotels) {
         console.log('🏨 Searching hotels...')
         try {
-          const hotelsResponse = await fetch('http://localhost:8000/api/hotels/search', {
+          const hotelsResponse = await fetch('https://globetrail-ysb8.onrender.com/api/hotels/search', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -570,7 +570,7 @@ const ChatbotSection = forwardRef<ChatbotSectionRef>((props, ref) => {
           }
 
           if (destination) {
-            const placesResponse = await fetch('http://localhost:8000/api/places/search', {
+            const placesResponse = await fetch('https://globetrail-ysb8.onrender.com/api/places/search', {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
@@ -657,7 +657,7 @@ const ChatbotSection = forwardRef<ChatbotSectionRef>((props, ref) => {
           // If places search failed but we have a destination, try natural language fallback for places info
           try {
             console.log('🏛️ Places search failed, trying natural language fallback for destination info...');
-            const placesNaturalResponse = await fetch('http://localhost:8000/api/chat/natural', {
+            const placesNaturalResponse = await fetch('https://globetrail-ysb8.onrender.com/api/chat/natural', {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
@@ -697,7 +697,7 @@ const ChatbotSection = forwardRef<ChatbotSectionRef>((props, ref) => {
         console.log('🤖 No API results available, using natural language response...');
 
         try {
-          const naturalResponse = await fetch('http://localhost:8000/api/chat/natural', {
+          const naturalResponse = await fetch('https://globetrail-ysb8.onrender.com/api/chat/natural', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -742,7 +742,7 @@ const ChatbotSection = forwardRef<ChatbotSectionRef>((props, ref) => {
       // Try to get a natural language response as fallback
       try {
         console.log('🤖 Attempting natural language fallback...');
-        const naturalResponse = await fetch('http://localhost:8000/api/chat/natural', {
+        const naturalResponse = await fetch('https://globetrail-ysb8.onrender.com/api/chat/natural', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
