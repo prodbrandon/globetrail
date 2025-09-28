@@ -21,7 +21,7 @@ class GeminiTravelAgent:
             raise ValueError("GEMINI_API_KEY not found in environment")
 
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-1.5-pro')
+        self.model = genai.GenerativeModel('gemini-2.5-flash')
         print("✅ Gemini client initialized")
 
     async def plan_trip(self, user_request: str, conversation_id: str = None, force_refresh: bool = False) -> Dict[
@@ -79,7 +79,7 @@ class GeminiTravelAgent:
                     clusters = {"clusters": []}
                     parsed_request = await self._parse_travel_request(user_request, conversation_id)
 
-            # Step 2: Generate response using the travel data (always use Gemini for this)
+            # Step 2: Generate response (always use Gemini for this)
             recommendations = await self._generate_contextual_response(
                 user_request, travel_data, clusters, parsed_request, conversation_id
             )
@@ -93,7 +93,7 @@ class GeminiTravelAgent:
                 })
 
             return {
-                "parsed_request": parsed_request,
+                "request": parsed_request,
                 "travel_data": travel_data,
                 "clusters": clusters,
                 "recommendations": recommendations,
@@ -189,7 +189,8 @@ class GeminiTravelAgent:
         prompt = f"""
         {context}Current request: "{user_request}"
 
-        Extract travel parameters. If this is a follow-up message, use context from previous conversation.
+        Extract travel parameters. If this is a follow-up message, use context from previous conversation. Make sure the
+        departure and arrival cities are in airport code. Example: Los Angeles is LAX.
 
         Return JSON:
         {{
@@ -404,7 +405,7 @@ class GeminiTravelAgent:
     async def _generate_contextual_response(self, user_request: str, travel_data: Dict[str, List[Any]],
                                             clusters: Dict[str, Any], parsed_request: Dict[str, Any],
                                             conversation_id: str = None) -> List[Dict[str, Any]]:
-        """Generate response using actual travel data"""
+        """Generate response considering conversation context"""
 
         # Build conversation context
         context = ""
@@ -416,38 +417,25 @@ class GeminiTravelAgent:
                     context += f"{msg['role']}: {msg['content'][:150]}...\n"
                 context += "\n"
 
-        # Build detailed travel data summary for Gemini
-        travel_summary = self._build_travel_data_summary(travel_data, clusters)
-
         prompt = f"""
-        {context}User request: "{user_request}"
+        {context}Current user request: "{user_request}"
 
-        TRAVEL DATA FOUND:
-        {travel_summary}
+        Available travel data:
+        - Flights: {len(travel_data.get('flights', []))} options
+        - Hotels: {len(travel_data.get('hotels', []))} options  
+        - Activities: {len(travel_data.get('activities', []))} options
+        - Restaurants: {len(travel_data.get('restaurants', []))} options
 
-        Trip Details:
-        - Destination: {parsed_request.get('destination', 'Unknown')}
-        - Budget: ${parsed_request.get('budget', 'Unknown')}
-        - Travelers: {parsed_request.get('travelers', 1)}
-        - Interests: {', '.join(parsed_request.get('interests', []))}
+        Destination: {parsed_request.get('destination', 'Unknown')}
+        Budget: ${parsed_request.get('budget', 'Unknown')}
 
-        Based on the ACTUAL travel data above, create personalized travel recommendations.
-        Use the real flight prices, hotel names, activity ratings, and restaurant details.
+        Based on the user's request and conversation context, provide a helpful response. 
+        If they're asking follow-up questions about specific options, focus on those.
+        If they want comparisons, use the available data.
+        If they're asking general questions, provide comprehensive recommendations.
 
-        Create 3 recommendation packages:
-        1. Budget Option - using cheapest flights/hotels from the data
-        2. Balanced Option - using mid-range options from the data  
-        3. Premium Option - using luxury options from the data
-
-        For each recommendation, include:
-        - Specific flight details (airline, price, flight number)
-        - Specific hotel details (name, price per night, rating)
-        - Specific activities (names, ratings, estimated costs)
-        - Total estimated cost
-        - Why this package fits the user's needs
-
-        Return as JSON array of recommendation objects.
-        Use ONLY the actual data provided above - no made-up information.
+        Return helpful recommendations as a JSON array of recommendation objects.
+        Each recommendation should have: name, description, highlights, estimated_cost.
         """
 
         try:
@@ -470,121 +458,11 @@ class GeminiTravelAgent:
 
         except Exception as e:
             print(f"⚠️ Error generating recommendations: {str(e)}")
-            # Fallback using actual data
-            return self._generate_fallback_recommendations(travel_data, clusters, parsed_request)
-
-    def _build_travel_data_summary(self, travel_data: Dict[str, List[Any]], clusters: Dict[str, Any]) -> str:
-        """Build detailed summary of actual travel data for Gemini"""
-
-        summary = ""
-
-        # Flight data
-        flights = travel_data.get('flights', [])
-        if flights:
-            summary += f"FLIGHTS FOUND ({len(flights)} options):\n"
-            for i, flight in enumerate(flights[:5], 1):  # Top 5 flights
-                summary += f"  {i}. {flight.get('airline_name', 'Unknown')} {flight.get('main_flight_number', '')} - "
-                summary += f"${flight.get('price', 0)} - {flight.get('duration', 'Unknown')} - "
-                summary += f"{flight.get('stops', 0)} stops - {flight.get('cluster_category', 'unknown')} category\n"
-        else:
-            summary += "FLIGHTS: No flight data available\n"
-
-        # Hotel data
-        hotels = travel_data.get('hotels', [])
-        if hotels:
-            summary += f"\nHOTELS FOUND ({len(hotels)} options):\n"
-            for i, hotel in enumerate(hotels[:5], 1):  # Top 5 hotels
-                summary += f"  {i}. {hotel.get('name', 'Unknown Hotel')} - "
-                summary += f"${hotel.get('price_per_night', 0)}/night - "
-                summary += f"{hotel.get('rating', 'N/A')} stars - {hotel.get('cluster_category', 'unknown')} category\n"
-        else:
-            summary += "HOTELS: No hotel data available\n"
-
-        # Activity data
-        activities = travel_data.get('activities', [])
-        if activities:
-            summary += f"\nACTIVITIES FOUND ({len(activities)} options):\n"
-            for i, activity in enumerate(activities[:5], 1):  # Top 5 activities
-                summary += f"  {i}. {activity.get('name', 'Unknown Activity')} - "
-                summary += f"${activity.get('price', 0)} - Rating: {activity.get('rating', 'N/A')}\n"
-        else:
-            summary += "ACTIVITIES: No activity data available\n"
-
-        # Restaurant data
-        restaurants = travel_data.get('restaurants', [])
-        if restaurants:
-            summary += f"\nRESTAURANTS FOUND ({len(restaurants)} options):\n"
-            for i, restaurant in enumerate(restaurants[:5], 1):  # Top 5 restaurants
-                summary += f"  {i}. {restaurant.get('name', 'Unknown Restaurant')} - "
-                summary += f"Price Level: {restaurant.get('price_level', 'N/A')} - "
-                summary += f"Rating: {restaurant.get('rating', 'N/A')}\n"
-        else:
-            summary += "RESTAURANTS: No restaurant data available\n"
-
-        # Clustering summary
-        flight_clusters = clusters.get('flight_clusters', {})
-        hotel_clusters = clusters.get('hotel_clusters', {})
-
-        summary += f"\nCLUSTERING ANALYSIS:\n"
-        summary += f"  Budget flights: {len(flight_clusters.get('budget', []))}\n"
-        summary += f"  Mid-range flights: {len(flight_clusters.get('mid_range', []))}\n"
-        summary += f"  Luxury flights: {len(flight_clusters.get('luxury', []))}\n"
-        summary += f"  Budget hotels: {len(hotel_clusters.get('budget', []))}\n"
-        summary += f"  Mid-range hotels: {len(hotel_clusters.get('mid_range', []))}\n"
-        summary += f"  Luxury hotels: {len(hotel_clusters.get('luxury', []))}\n"
-
-        return summary
-
-    def _generate_fallback_recommendations(self, travel_data: Dict[str, List[Any]],
-                                           clusters: Dict[str, Any],
-                                           parsed_request: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Generate fallback recommendations using actual data"""
-
-        flights = travel_data.get('flights', [])
-        hotels = travel_data.get('hotels', [])
-        budget = parsed_request.get('budget', 2000)
-
-        recommendations = []
-
-        # Budget recommendation
-        budget_flight = min(flights, key=lambda x: x.get('price', float('inf'))) if flights else None
-        budget_hotel = min(hotels, key=lambda x: x.get('price_per_night', float('inf'))) if hotels else None
-
-        if budget_flight and budget_hotel:
-            budget_cost = budget_flight['price'] + (budget_hotel['price_per_night'] * 4)  # 4 nights
-            recommendations.append({
-                "name": "Budget Option",
-                "description": f"Affordable trip using {budget_flight['airline_name']} and {budget_hotel['name']}",
-                "highlights": [
-                    f"Flight: {budget_flight['airline_name']} ${budget_flight['price']}",
-                    f"Hotel: {budget_hotel['name']} ${budget_hotel['price_per_night']}/night",
-                    "Great value for money"
-                ],
-                "estimated_cost": budget_cost
-            })
-
-        # Premium recommendation
-        premium_flight = max(flights, key=lambda x: x.get('price', 0)) if flights else None
-        premium_hotel = max(hotels, key=lambda x: x.get('price_per_night', 0)) if hotels else None
-
-        if premium_flight and premium_hotel:
-            premium_cost = premium_flight['price'] + (premium_hotel['price_per_night'] * 4)
-            recommendations.append({
-                "name": "Premium Option",
-                "description": f"Luxury experience with {premium_flight['airline_name']} and {premium_hotel['name']}",
-                "highlights": [
-                    f"Flight: {premium_flight['airline_name']} ${premium_flight['price']}",
-                    f"Hotel: {premium_hotel['name']} ${premium_hotel['price_per_night']}/night",
-                    "Premium comfort and service"
-                ],
-                "estimated_cost": premium_cost
-            })
-
-        return recommendations if recommendations else [
-            {
-                "name": "Custom Recommendation",
-                "description": f"Travel recommendations for {parsed_request.get('destination', 'your destination')}",
-                "highlights": ["Personalized travel planning", "Based on your preferences"],
-                "estimated_cost": budget
-            }
-        ]
+            return [
+                {
+                    "name": "Quick Response",
+                    "description": f"Response to: {user_request}",
+                    "highlights": ["AI-generated response"],
+                    "estimated_cost": 0
+                }
+            ]
