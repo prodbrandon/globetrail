@@ -1,4 +1,4 @@
-// components/chatbot-section.tsx - Enhanced with Naive Bayes Classifier
+// components/chatbot-section.tsx - Enhanced with Fast Travel Classifier
 
 "use client"
 
@@ -8,10 +8,10 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Send, Bot, User, Globe, Loader2, Plane, Hotel, MapPin, Utensils, ChevronDown } from "lucide-react"
-// REPLACE: Use Naive Bayes instead of simple keyword classifier
+// Fast keyword-based classifier for travel queries
 import { NaiveBayesChatClassifier } from "@/lib/naive-bayes-classifier"
 
-// INITIALIZE: Naive Bayes classifier (automatically trains on initialization)
+// INITIALIZE: Fast travel classifier (no training needed)
 const nbClassifier = new NaiveBayesChatClassifier();
 
 // Keep all your existing interfaces unchanged
@@ -139,22 +139,21 @@ export default function ChatbotSection() {
   const scrollAreaRef = useRef<HTMLDivElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
-  // ENHANCED: Naive Bayes powered search intent analysis
+  // ENHANCED: Fast keyword-based search intent analysis
   const analyzeSearchIntent = (message: string): {
     needsFlights: boolean;
     needsHotels: boolean;
     needsPlaces: boolean;
     destination?: string;
   } => {
-    // ENHANCED: Use Naive Bayes for classification
+    // ENHANCED: Use fast keyword classification
     const comprehensive = nbClassifier.analyzeComprehensive(message);
     const { classification, multiIntent, urgency, budget } = comprehensive;
-    
-    console.log('🧠 Naive Bayes Classification:', {
+
+    console.log('🧠 Fast Classification:', {
       category: classification.category,
       confidence: classification.confidence,
-      probabilities: classification.probabilities,
-      keywords: classification.keywords.slice(0, 5)
+      matchedKeywords: classification.matchedKeywords.slice(0, 5)
     });
 
     if (multiIntent.length > 1) {
@@ -172,7 +171,7 @@ export default function ChatbotSection() {
     // Keep your existing destination extraction logic (it works well)
     const lowerMessage = message.toLowerCase();
     let destination = null;
-    
+
     const patterns = [
       /(?:places|activities|things to do|attractions|visit|explore|see)\s+(?:in|at|around)\s+([a-zA-Z\s]+?)(?:\?|$|,)/,
       /(?:hotel|hotels|stay|accommodation|lodge|resort)\s+(?:in|at|around)\s+([a-zA-Z\s]+?)(?:\?|$|,)/,
@@ -181,7 +180,7 @@ export default function ChatbotSection() {
       /^([a-zA-Z\s]+?)\s+(?:places|attractions|activities|things to do|hotels|flights)(?:\?|$)/,
       /(?:what|where|show|find|get)\s+(?:me\s+)?(?:some\s+)?(?:good\s+)?(?:places|attractions|activities|things|hotels|flights)?\s*(?:in|at|around|for|to)?\s+([a-zA-Z\s]{2,30})(?:\?|$)/
     ];
-    
+
     for (const pattern of patterns) {
       const match = lowerMessage.match(pattern);
       if (match && match[1]) {
@@ -192,7 +191,7 @@ export default function ChatbotSection() {
           .split(' ')
           .map(word => word.charAt(0).toUpperCase() + word.slice(1))
           .join(' ');
-        
+
         const genericWords = ['there', 'here', 'somewhere', 'anywhere', 'places', 'city', 'town'];
         if (!genericWords.includes(destination.toLowerCase()) && destination.length > 1) {
           break;
@@ -201,20 +200,20 @@ export default function ChatbotSection() {
         }
       }
     }
-    
+
     if (!destination) {
       const words = message.split(/\s+/);
-      const capitalizedWords = words.filter(word => 
-        /^[A-Z][a-z]+/.test(word) && 
+      const capitalizedWords = words.filter(word =>
+        /^[A-Z][a-z]+/.test(word) &&
         !['I', 'What', 'Where', 'When', 'How', 'Can', 'Show', 'Find', 'Get'].includes(word)
       );
-      
+
       if (capitalizedWords.length > 0) {
         destination = capitalizedWords.join(' ');
       }
     }
 
-    // ENHANCED: Intent determination using Naive Bayes results
+    // ENHANCED: Intent determination using fast classification results
     let needsFlights = false;
     let needsHotels = false;
     let needsPlaces = false;
@@ -222,7 +221,7 @@ export default function ChatbotSection() {
     // Multi-intent: check if multiple categories have significant probability
     if (multiIntent.length > 1) {
       needsFlights = multiIntent.includes('flights');
-      needsHotels = multiIntent.includes('hotels'); 
+      needsHotels = multiIntent.includes('hotels');
       needsPlaces = multiIntent.includes('places');
     } else {
       // Single intent based on highest probability category
@@ -249,11 +248,11 @@ export default function ChatbotSection() {
           const flightKeywords = ['flight', 'flights', 'fly', 'plane', 'airport', 'departure', 'arrival', 'round trip', 'one way'];
           const hotelKeywords = ['hotel', 'hotels', 'accommodation', 'stay', 'lodge', 'resort', 'booking', 'room'];
           const placeKeywords = ['places', 'attractions', 'activities', 'things to do', 'sightseeing', 'visit', 'see', 'explore', 'tourist'];
-          
+
           const hasFlightKeywords = flightKeywords.some(keyword => lowerMessage.includes(keyword));
           const hasHotelKeywords = hotelKeywords.some(keyword => lowerMessage.includes(keyword));
           const hasPlaceKeywords = placeKeywords.some(keyword => lowerMessage.includes(keyword));
-          
+
           if (hasFlightKeywords || hasHotelKeywords || hasPlaceKeywords) {
             needsFlights = hasFlightKeywords;
             needsHotels = hasHotelKeywords;
@@ -269,7 +268,7 @@ export default function ChatbotSection() {
     }
 
     // ENHANCED: Log classification insights
-    console.log('🎯 Naive Bayes Intent Analysis:', {
+    console.log('🎯 Fast Intent Analysis:', {
       needs: { flights: needsFlights, hotels: needsHotels, places: needsPlaces },
       confidence: classification.confidence,
       shouldRouteToLLM: comprehensive.shouldRouteToLLM
@@ -315,6 +314,42 @@ export default function ChatbotSection() {
       // Use enhanced search intent analysis
       const searchIntent = analyzeSearchIntent(currentInput);
       console.log('🔍 Final Search Intent:', searchIntent);
+
+      // If classifier detected non-travel query, skip APIs and go straight to natural language
+      if (comprehensive.classification.category === 'other' && comprehensive.classification.confidence > 0.8) {
+        console.log('🤖 Non-travel query detected, using natural language response...');
+
+        try {
+          const naturalResponse = await fetch('http://localhost:8000/api/chat/natural', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              message: currentInput,
+              user_id: "hackathon_user",
+              error_context: "Non-travel query"
+            })
+          });
+
+          if (naturalResponse.ok) {
+            const naturalResult = await naturalResponse.json();
+            if (naturalResult.success) {
+              console.log('✅ Natural language response successful');
+              const naturalMessage: Message = {
+                id: (Date.now() + 1).toString(),
+                content: naturalResult.response,
+                sender: "bot",
+                timestamp: new Date(),
+              }
+              setMessages((prev) => [...prev, naturalMessage])
+              return; // Exit early since we got a response
+            }
+          }
+        } catch (naturalError) {
+          console.warn('⚠️ Natural language response failed:', naturalError);
+        }
+      }
 
       // Keep all your existing API calls exactly as they are
       let flightsResult = null;
@@ -388,6 +423,11 @@ export default function ChatbotSection() {
             if (placesResponse.ok) {
               placesResult = await placesResponse.json();
               console.log('✅ Places result:', placesResult.success ? 'Success' : 'Failed');
+
+              // Handle natural language fallback from places API
+              if (placesResult.success && placesResult.is_fallback && placesResult.natural_language_response) {
+                console.log('🤖 Places API returned natural language fallback');
+              }
             }
           } else {
             console.warn('⚠️ No destination found for places search');
@@ -397,8 +437,10 @@ export default function ChatbotSection() {
         }
       }
 
-      // Keep all your existing result processing exactly as is
-      if (flightsResult?.success || hotelsResult?.success || placesResult?.success) {
+      // Check if we got any successful API results
+      const hasSuccessfulResults = flightsResult?.success || hotelsResult?.success || placesResult?.success;
+
+      if (hasSuccessfulResults) {
         const combinedData: TravelData = {
           raw_data: {
             flights: [],
@@ -437,13 +479,46 @@ export default function ChatbotSection() {
           }));
         }
 
-        if (placesResult?.success && placesResult.data) {
+        if (placesResult?.success && placesResult.data && placesResult.data.length > 0) {
           combinedData.raw_data!.activities = placesResult.data.map((place: any) => ({
             name: place.name || 'Unknown Activity',
             type: place.types?.[0] || 'attraction',
             price: 0,
             duration: 'Variable'
           }));
+        }
+
+        // Handle natural language response from places API
+        if (placesResult?.success && placesResult.is_fallback && placesResult.natural_language_response) {
+          combinedData.recommendations = (combinedData.recommendations || '') +
+            `\n\n🏛️ **About ${placesResult.destination_city}:**\n${placesResult.natural_language_response}`;
+        } else if (searchIntent.needsPlaces && searchIntent.destination && (!placesResult?.success || !placesResult?.data?.length)) {
+          // If places search failed but we have a destination, try natural language fallback for places info
+          try {
+            console.log('🏛️ Places search failed, trying natural language fallback for destination info...');
+            const placesNaturalResponse = await fetch('http://localhost:8000/api/chat/natural', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                message: `What are the top attractions and things to do in ${searchIntent.destination}?`,
+                user_id: "hackathon_user",
+                error_context: "Places API unavailable"
+              })
+            });
+
+            if (placesNaturalResponse.ok) {
+              const placesNaturalResult = await placesNaturalResponse.json();
+              if (placesNaturalResult.success) {
+                // Add the natural language response as a recommendation
+                combinedData.recommendations = (combinedData.recommendations || '') +
+                  `\n\n🏛️ **About ${searchIntent.destination}:**\n${placesNaturalResult.response}`;
+              }
+            }
+          } catch (placesNaturalError) {
+            console.warn('⚠️ Places natural language fallback failed:', placesNaturalError);
+          }
         }
 
         const formattedContent = formatTravelResponse(combinedData);
@@ -457,6 +532,41 @@ export default function ChatbotSection() {
         }
         setMessages((prev) => [...prev, botMessage])
       } else {
+        // No successful API results - try natural language response
+        console.log('🤖 No API results available, using natural language response...');
+
+        try {
+          const naturalResponse = await fetch('http://localhost:8000/api/chat/natural', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              message: currentInput,
+              user_id: "hackathon_user",
+              error_context: "Travel APIs unavailable"
+            })
+          });
+
+          if (naturalResponse.ok) {
+            const naturalResult = await naturalResponse.json();
+            if (naturalResult.success) {
+              console.log('✅ Natural language response successful');
+              const naturalMessage: Message = {
+                id: (Date.now() + 1).toString(),
+                content: naturalResult.response,
+                sender: "bot",
+                timestamp: new Date(),
+              }
+              setMessages((prev) => [...prev, naturalMessage])
+              return; // Exit early since we got a response
+            }
+          }
+        } catch (naturalError) {
+          console.warn('⚠️ Natural language response failed:', naturalError);
+        }
+
+        // If natural language also fails, show error
         let errorMessages = [];
         if (searchIntent.needsFlights && !flightsResult?.success) errorMessages.push('flights');
         if (searchIntent.needsHotels && !hotelsResult?.success) errorMessages.push('hotels');
@@ -468,6 +578,40 @@ export default function ChatbotSection() {
     } catch (error) {
       console.error('Error calling APIs:', error);
 
+      // Try to get a natural language response as fallback
+      try {
+        console.log('🤖 Attempting natural language fallback...');
+        const naturalResponse = await fetch('http://localhost:8000/api/chat/natural', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            message: currentInput,
+            user_id: "hackathon_user",
+            error_context: error instanceof Error ? error.message : "API connection failed"
+          })
+        });
+
+        if (naturalResponse.ok) {
+          const naturalResult = await naturalResponse.json();
+          if (naturalResult.success) {
+            console.log('✅ Natural language fallback successful');
+            const fallbackMessage: Message = {
+              id: (Date.now() + 1).toString(),
+              content: naturalResult.response,
+              sender: "bot",
+              timestamp: new Date(),
+            }
+            setMessages((prev) => [...prev, fallbackMessage])
+            return; // Exit early since we got a response
+          }
+        }
+      } catch (fallbackError) {
+        console.warn('⚠️ Natural language fallback also failed:', fallbackError);
+      }
+
+      // If natural language fallback fails, show technical error
       let errorMessage = "I'm having trouble connecting to my travel services right now. ";
 
       if (error instanceof Error) {
@@ -692,8 +836,12 @@ export default function ChatbotSection() {
   )
 }
 
-// Keep all your existing display components exactly as they are
-function FlightDisplay({ flights }: { flights: FlightData[] }) {
+// Enhanced display components with expandable functionality
+function FlightDisplay({ flights, expanded, onToggle }: {
+  flights: FlightData[];
+  expanded: boolean;
+  onToggle: () => void;
+}) {
   return (
     <div className="bg-black/30 rounded p-3 border border-gray-600/30">
       <div className="flex items-center gap-2 mb-2">
@@ -701,26 +849,26 @@ function FlightDisplay({ flights }: { flights: FlightData[] }) {
         <span className="text-xs font-semibold text-blue-400">FLIGHTS</span>
       </div>
       <div className="space-y-3">
-        {flights.slice(0, 3).map((flight, idx) => {
+        {(expanded ? flights : flights.slice(0, 3)).map((flight, idx) => {
           const departureDateTime = flight.departure_time || flight.origin_time || '';
           const departureDate = departureDateTime ? new Date(departureDateTime).toLocaleDateString() : '';
           const departureTime = departureDateTime ? new Date(departureDateTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
-          
+
           const arrivalDateTime = flight.arrival_time || '';
           const arrivalTime = arrivalDateTime ? new Date(arrivalDateTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
-          
+
           const originCode = flight.origin || 'Unknown';
           const originName = flight.origin_name || 'Unknown Airport';
           const destCode = flight.destination || 'Unknown';
           const destName = flight.destination_name || 'Unknown Airport';
-          
+
           const price = flight.price || 0;
           const currency = flight.currency || 'USD';
-          
-          const categoryColor = flight.category === 'best' ? 'text-green-400' : 
-                               flight.category === 'cheapest' ? 'text-yellow-400' : 
-                               'text-blue-400';
-          
+
+          const categoryColor = flight.category === 'best' ? 'text-green-400' :
+            flight.category === 'cheapest' ? 'text-yellow-400' :
+              'text-blue-400';
+
           return (
             <div key={flight.id || idx} className="text-xs border-l-2 border-gray-600 pl-3">
               <div className="flex justify-between items-center mb-1">
@@ -797,7 +945,7 @@ function FlightDisplay({ flights }: { flights: FlightData[] }) {
 
               {flight.layovers && flight.layovers.length > 0 && (
                 <div className="mt-2 text-xs text-yellow-300">
-                  🔄 Layovers: {flight.layovers.map(layover => 
+                  🔄 Layovers: {flight.layovers.map(layover =>
                     `${layover.airport} (${layover.duration || 'N/A'})`
                   ).join(', ')}
                 </div>
@@ -805,10 +953,17 @@ function FlightDisplay({ flights }: { flights: FlightData[] }) {
             </div>
           );
         })}
-        
+
         {flights.length > 3 && (
-          <div className="text-xs text-gray-400 text-center pt-2 border-t border-gray-600/30">
-            +{flights.length - 3} more flights available
+          <div className="pt-2 border-t border-gray-600/30 text-center">
+            <Button
+              onClick={onToggle}
+              variant="ghost"
+              size="sm"
+              className="text-xs text-gray-400 hover:text-white hover:bg-white/10 h-6 px-2"
+            >
+              {expanded ? 'Show less' : `Show ${flights.length - 3} more`}
+            </Button>
           </div>
         )}
       </div>
@@ -816,8 +971,27 @@ function FlightDisplay({ flights }: { flights: FlightData[] }) {
   );
 }
 
-// Keep your existing TravelDataDisplay component exactly as is
+// Enhanced TravelDataDisplay component with expandable sections
 function TravelDataDisplay({ data }: { data: TravelData }) {
+  const [expandedSections, setExpandedSections] = useState<{
+    flights: boolean;
+    hotels: boolean;
+    activities: boolean;
+    restaurants: boolean;
+  }>({
+    flights: false,
+    hotels: false,
+    activities: false,
+    restaurants: false,
+  });
+
+  const toggleSection = (section: keyof typeof expandedSections) => {
+    setExpandedSections(prev => ({
+      ...prev,
+      [section]: !prev[section]
+    }));
+  };
+
   const { raw_data } = data;
 
   if (!raw_data) return null;
@@ -825,7 +999,11 @@ function TravelDataDisplay({ data }: { data: TravelData }) {
   return (
     <div className="space-y-3">
       {raw_data.flights && raw_data.flights.length > 0 && (
-        <FlightDisplay flights={raw_data.flights} />
+        <FlightDisplay
+          flights={raw_data.flights}
+          expanded={expandedSections.flights}
+          onToggle={() => toggleSection('flights')}
+        />
       )}
 
       {raw_data.hotels && raw_data.hotels.length > 0 && (
@@ -835,13 +1013,13 @@ function TravelDataDisplay({ data }: { data: TravelData }) {
             <span className="text-xs font-semibold text-purple-400">HOTELS</span>
           </div>
           <div className="space-y-2">
-            {raw_data.hotels.slice(0, 3).map((hotel, idx) => (
+            {(expandedSections.hotels ? raw_data.hotels : raw_data.hotels.slice(0, 3)).map((hotel, idx) => (
               <div key={idx} className="text-xs text-gray-300">
                 <div className="flex justify-between items-center">
                   <span>{hotel.name || 'Unknown Hotel'}</span>
                   <span className="text-green-400">
-                    ${typeof hotel.price === 'object' && hotel.price?.amount 
-                      ? hotel.price.amount 
+                    ${typeof hotel.price === 'object' && hotel.price?.amount
+                      ? hotel.price.amount
                       : hotel.price_per_night || 'N/A'}/night
                   </span>
                 </div>
@@ -851,8 +1029,15 @@ function TravelDataDisplay({ data }: { data: TravelData }) {
               </div>
             ))}
             {raw_data.hotels.length > 3 && (
-              <div className="text-xs text-gray-400">
-                +{raw_data.hotels.length - 3} more hotels
+              <div className="pt-2 border-t border-gray-600/30 text-center">
+                <Button
+                  onClick={() => toggleSection('hotels')}
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs text-gray-400 hover:text-white hover:bg-white/10 h-6 px-2"
+                >
+                  {expandedSections.hotels ? 'Show less' : `Show ${raw_data.hotels.length - 3} more`}
+                </Button>
               </div>
             )}
           </div>
@@ -866,15 +1051,15 @@ function TravelDataDisplay({ data }: { data: TravelData }) {
             <span className="text-xs font-semibold text-orange-400">ACTIVITIES</span>
           </div>
           <div className="space-y-2">
-            {raw_data.activities.slice(0, 3).map((activity, idx) => (
+            {(expandedSections.activities ? raw_data.activities : raw_data.activities.slice(0, 3)).map((activity, idx) => (
               <div key={idx} className="text-xs text-gray-300">
                 <div className="flex justify-between items-center">
                   <span>{activity.name || 'Unknown Activity'}</span>
                   <span className="text-green-400">
-                    ${typeof activity.price === 'object' && activity.price?.amount 
-                      ? activity.price.amount 
-                      : typeof activity.price === 'number' 
-                        ? activity.price 
+                    ${typeof activity.price === 'object' && activity.price?.amount
+                      ? activity.price.amount
+                      : typeof activity.price === 'number'
+                        ? activity.price
                         : 'N/A'}
                   </span>
                 </div>
@@ -884,8 +1069,15 @@ function TravelDataDisplay({ data }: { data: TravelData }) {
               </div>
             ))}
             {raw_data.activities.length > 3 && (
-              <div className="text-xs text-gray-400">
-                +{raw_data.activities.length - 3} more activities
+              <div className="pt-2 border-t border-gray-600/30 text-center">
+                <Button
+                  onClick={() => toggleSection('activities')}
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs text-gray-400 hover:text-white hover:bg-white/10 h-6 px-2"
+                >
+                  {expandedSections.activities ? 'Show less' : `Show ${raw_data.activities.length - 3} more`}
+                </Button>
               </div>
             )}
           </div>
@@ -899,7 +1091,7 @@ function TravelDataDisplay({ data }: { data: TravelData }) {
             <span className="text-xs font-semibold text-red-400">RESTAURANTS</span>
           </div>
           <div className="space-y-2">
-            {raw_data.restaurants.slice(0, 3).map((restaurant, idx) => (
+            {(expandedSections.restaurants ? raw_data.restaurants : raw_data.restaurants.slice(0, 3)).map((restaurant, idx) => (
               <div key={idx} className="text-xs text-gray-300">
                 <div className="flex justify-between items-center">
                   <span>{restaurant.name || 'Unknown Restaurant'}</span>
@@ -911,8 +1103,15 @@ function TravelDataDisplay({ data }: { data: TravelData }) {
               </div>
             ))}
             {raw_data.restaurants.length > 3 && (
-              <div className="text-xs text-gray-400">
-                +{raw_data.restaurants.length - 3} more restaurants
+              <div className="pt-2 border-t border-gray-600/30 text-center">
+                <Button
+                  onClick={() => toggleSection('restaurants')}
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs text-gray-400 hover:text-white hover:bg-white/10 h-6 px-2"
+                >
+                  {expandedSections.restaurants ? 'Show less' : `Show ${raw_data.restaurants.length - 3} more`}
+                </Button>
               </div>
             )}
           </div>

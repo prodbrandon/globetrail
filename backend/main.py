@@ -38,6 +38,8 @@ class PlacesSearchResponse(BaseModel):
     data: Optional[list] = None
     error: Optional[str] = None
     destination_city: Optional[str] = None
+    natural_language_response: Optional[str] = None
+    is_fallback: Optional[bool] = False
 
 
 class CombinedTravelRequest(BaseModel):
@@ -52,6 +54,18 @@ class CombinedTravelResponse(BaseModel):
     data: dict = None
     error: str = None
     places: list = None
+
+
+class NaturalLanguageRequest(BaseModel):
+    message: str
+    user_id: Optional[str] = None
+    error_context: Optional[str] = None
+
+
+class NaturalLanguageResponse(BaseModel):
+    success: bool
+    response: str
+    is_fallback: bool = True
 
 
 class HotelSearchRequest(BaseModel):
@@ -542,6 +556,19 @@ def format_enhanced_flight_data(flight_data: Dict[str, Any], extracted_params: D
     # Format flights for easier frontend consumption
     formatted_flights = []
 
+    # Debug: Print first flight structure to understand SERP API response
+    if best_flights:
+        print("🔍 Debug: First flight structure from SERP API:")
+        first_flight_debug = best_flights[0]
+        print(f"   Flight keys: {list(first_flight_debug.keys())}")
+        if 'flights' in first_flight_debug and first_flight_debug['flights']:
+            flight_segment = first_flight_debug['flights'][0]
+            print(f"   Flight segment keys: {list(flight_segment.keys())}")
+            if 'departure_airport' in flight_segment:
+                print(f"   Departure airport: {flight_segment['departure_airport']}")
+            if 'arrival_airport' in flight_segment:
+                print(f"   Arrival airport: {flight_segment['arrival_airport']}")
+
     for flight in best_flights + other_flights:
         formatted_flight = {
             'id': flight.get('flight_id', f"flight_{len(formatted_flights)}"),
@@ -551,21 +578,42 @@ def format_enhanced_flight_data(flight_data: Dict[str, Any], extracted_params: D
             'flight_number': None,
             'departure_time': None,
             'arrival_time': None,
+            'departure_code': None,
+            'departure_name': None,
+            'arrival_code': None,
+            'arrival_name': None,
             'duration': flight.get('total_duration', 'N/A'),
             'stops': len(flight.get('layovers', [])),
             'booking_options': flight.get('booking_options', []),
             'flights': flight.get('flights', [])
         }
 
-        # Extract first flight details
+        # Extract flight details - show actual route as returned by API
         flights = flight.get('flights', [])
         if flights:
             first_flight = flights[0]
+            last_flight = flights[-1]  # Last segment for final destination
+            
+            departure_airport = first_flight.get('departure_airport', {})
+            arrival_airport = last_flight.get('arrival_airport', {})
+            
+            # Use actual airport codes from the API response
+            departure_code = departure_airport.get('id', 'N/A')
+            arrival_code = arrival_airport.get('id', 'N/A')
+            
+            # Get airport names directly from API, fallback to code + Airport
+            departure_name = departure_airport.get('name') or f"{departure_code} Airport"
+            arrival_name = arrival_airport.get('name') or f"{arrival_code} Airport"
+            
             formatted_flight.update({
                 'airline': first_flight.get('airline', 'N/A'),
                 'flight_number': first_flight.get('flight_number', 'N/A'),
-                'departure_time': first_flight.get('departure_airport', {}).get('time', 'N/A'),
-                'arrival_time': first_flight.get('arrival_airport', {}).get('time', 'N/A'),
+                'departure_time': departure_airport.get('time', 'N/A'),
+                'arrival_time': arrival_airport.get('time', 'N/A'),
+                'departure_code': departure_code,
+                'departure_name': departure_name,
+                'arrival_code': arrival_code,
+                'arrival_name': arrival_name,
             })
 
         formatted_flights.append(formatted_flight)
@@ -693,10 +741,25 @@ async def search_places(request: PlacesSearchRequest):
         places_data = await get_places_for_destination(request.destination_city, places_key)
 
         if places_data is None:
-            return PlacesSearchResponse(
-                success=False,
-                error=f"Could not find places for {request.destination_city}"
-            )
+            # Try to provide natural language response as fallback
+            try:
+                natural_response = await generate_natural_language_response(
+                    f"What are the top attractions and things to do in {request.destination_city}?",
+                    "Places API unavailable"
+                )
+                return PlacesSearchResponse(
+                    success=True,
+                    data=[],
+                    destination_city=request.destination_city,
+                    natural_language_response=natural_response,
+                    is_fallback=True
+                )
+            except Exception as fallback_error:
+                print(f"❌ Natural language fallback also failed: {str(fallback_error)}")
+                return PlacesSearchResponse(
+                    success=False,
+                    error=f"Could not find places for {request.destination_city}"
+                )
 
         return PlacesSearchResponse(
             success=True,
@@ -709,6 +772,55 @@ async def search_places(request: PlacesSearchRequest):
             success=False,
             error=f"Unexpected error: {str(e)}"
         )
+
+
+async def generate_natural_language_response(user_query: str, error_context: str = None) -> str:
+    """Generate a natural language response using Gemini when APIs fail"""
+    
+    gemini_key = os.getenv('GEMINI_API_KEY')
+    if not gemini_key:
+        return "I'm having trouble accessing my travel services right now. Please try again later."
+    
+    try:
+        genai.configure(api_key=gemini_key)
+        model = genai.GenerativeModel('gemini-2.5-flash')
+        
+        # Create a prompt that provides helpful travel information
+        prompt = f"""
+        The user asked: "{user_query}"
+        
+        Please provide a comprehensive and helpful response about their travel query. Act as a knowledgeable travel assistant and include:
+
+        If they're asking about a specific destination:
+        - Top attractions and must-see places
+        - Popular activities and experiences
+        - Best time to visit and weather considerations
+        - Local culture, food, and customs
+        - Transportation options within the city
+        - Approximate budget considerations
+        - Travel tips and recommendations
+
+        If they're asking about flights:
+        - General advice about booking flights to that destination
+        - Typical flight duration and connections
+        - Best times to book for better prices
+        - Airport information and transportation
+
+        If they're asking about hotels:
+        - Popular neighborhoods to stay in
+        - Types of accommodations available
+        - General price ranges
+        - Booking tips
+
+        Be conversational, enthusiastic, and informative. Provide specific examples and practical advice. Keep the response under 400 words but make it comprehensive and engaging.
+        """
+        
+        response = await asyncio.to_thread(model.generate_content, prompt)
+        return response.text.strip()
+        
+    except Exception as e:
+        print(f"❌ Error generating natural language response: {str(e)}")
+        return "I'm having trouble with my travel services right now, but I'd be happy to help you plan your trip once the connection is restored. Please try again in a few moments."
 
 
 @app.post("/api/travel/search", response_model=CombinedTravelResponse)
@@ -980,6 +1092,35 @@ async def search_hotels(request: HotelSearchRequest):
         return HotelSearchResponse(
             success=False,
             error=f"Unexpected error: {str(e)}"
+        )
+
+
+@app.post("/api/chat/natural", response_model=NaturalLanguageResponse)
+async def natural_language_chat(request: NaturalLanguageRequest):
+    """
+    Provide natural language responses when travel APIs fail
+    
+    This endpoint uses Gemini to provide helpful travel information
+    when specific travel data cannot be retrieved.
+    """
+    
+    try:
+        response_text = await generate_natural_language_response(
+            request.message, 
+            request.error_context
+        )
+        
+        return NaturalLanguageResponse(
+            success=True,
+            response=response_text,
+            is_fallback=True
+        )
+        
+    except Exception as e:
+        return NaturalLanguageResponse(
+            success=False,
+            response="I'm experiencing technical difficulties right now. Please try again later.",
+            is_fallback=True
         )
 
 
