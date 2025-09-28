@@ -8,6 +8,11 @@ export const metadata: Metadata = {
   title: 'GlobeTrail',
   description: 'GlobeTrail',
   generator: 'GlobeTrail',
+  icons: {
+    icon: '/download (4) (1).svg',
+    shortcut: '/download (4) (1).svg',
+    apple: '/download (4) (1).svg',
+  },
 }
 
 export default function RootLayout({

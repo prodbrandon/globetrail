@@ -891,7 +891,7 @@ const ChatbotSection = forwardRef<ChatbotSectionRef>((props, ref) => {
           </div>
           <div>
             <h2 className="text-xl font-semibold text-white font-mono">GlobeTrail</h2>
-            <p className="text-sm text-gray-400 font-mono">// AI Travel Assistant</p>
+            <p className="text-sm text-gray-400 font-mono">Powered by Google Gemini</p>
           </div>
         </div>
       </div>
