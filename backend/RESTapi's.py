@@ -1,58 +1,363 @@
-#!/usr/bin/env python3
-"""
-Simple Gemini + SERP API Test
-Input string -> Gemini parsing -> SERP API with variables
-"""
-
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import os
-import asyncio
-import aiohttp
-import json
 from dotenv import load_dotenv
+from contextlib import asynccontextmanager
+import asyncio
+import traceback
+from typing import Optional, Dict, Any
+import json
+import aiohttp
 import google.generativeai as genai
 from datetime import datetime, timedelta
 
 load_dotenv()
 
 
-async def test_gemini_serp_integration():
-    """Test Gemini parsing + SERP API with variable parameters"""
+# Request/Response models
+class FlightSearchRequest(BaseModel):
+    message: str
+    user_id: Optional[str] = None
 
-    # Interactive input - allows full multi-line input until Enter
-    print("Enter your travel request (press Enter when done):")
-    print("Examples:")
-    print("  - Round trip from Los Angeles to Tokyo for 2 people departing January 15th")
-    print("  - One way flight from NYC to Paris for 3 adults and 2 children")
-    print("  - Business class round trip Boston to London departing next month")
-    print()
 
-    user_input = input("Your travel request: ").strip()
+class FlightSearchResponse(BaseModel):
+    success: bool
+    data: Optional[Dict[Any, Any]] = None
+    error: Optional[str] = None
+    extracted_params: Optional[Dict[str, Any]] = None
 
-    if not user_input:
-        print("No input provided")
-        return False
 
-    print(f"\nInput received: {user_input}")
-    print("=" * 80)
+class PlacesSearchRequest(BaseModel):
+    destination_city: str
+    user_id: Optional[str] = None
 
-    # Step 1: Gemini parses the input
-    gemini_key = os.getenv('GEMINI_API_KEY')
+
+class PlacesSearchResponse(BaseModel):
+    success: bool
+    data: Optional[list] = None
+    error: Optional[str] = None
+    destination_city: Optional[str] = None
+
+
+class CombinedTravelRequest(BaseModel):
+    message: str
+    user_id: str = "hackathon_user"
+    conversation_id: str = None
+    force_refresh: bool = False
+
+
+class CombinedTravelResponse(BaseModel):
+    success: bool
+    data: dict = None
+    error: str = None
+    places: list = None
+
+
+class HotelSearchRequest(BaseModel):
+    message: str  # Natural language input like flights
+    check_in_date: Optional[str] = None  # Override if specified
+    check_out_date: Optional[str] = None  # Override if specified
+    adults: Optional[int] = None  # Override if specified
+    children: Optional[int] = None  # Override if specified
+    user_id: Optional[str] = None
+
+
+class HotelSearchResponse(BaseModel):
+    success: bool
+    data: Optional[list] = None
+    error: Optional[str] = None
+    search_params: Optional[Dict[str, Any]] = None
+
+
+async def get_places_for_destination(destination_city: str, api_key: str) -> Optional[list]:
+    """Get places for the destination city using Google Places API"""
+
+    if not api_key:
+        print("⚠️ Google Places API key not provided")
+        return None
+    try:
+        async with aiohttp.ClientSession() as session:
+            # Step 1: Geocode the destination
+            print(f"🗺️ Geocoding destination: {destination_city}")
+
+            geocode_params = {
+                'address': destination_city,
+                'key': api_key
+            }
+
+            async with session.get(
+                    'https://maps.googleapis.com/maps/api/geocode/json',
+                    params=geocode_params,
+                    timeout=10
+            ) as response:
+
+                if response.status != 200:
+                    print(f"❌ Geocoding failed: {response.status}")
+                    return None
+
+                geocode_data = await response.json()
+
+                if geocode_data['status'] != 'OK':
+                    print(f"❌ Geocoding error: {geocode_data['status']}")
+                    return None
+
+                location = geocode_data['results'][0]['geometry']['location']
+                print(f"✅ Found coordinates: {location['lat']}, {location['lng']}")
+
+            # Step 2: Search for tourist attractions
+            print("🏛️ Searching for attractions...")
+
+            places_params = {
+                'location': f"{location['lat']},{location['lng']}",
+                'radius': 10000,  # 10km radius
+                'type': 'tourist_attraction',
+                'key': api_key
+            }
+
+            async with session.get(
+                    'https://maps.googleapis.com/maps/api/place/nearbysearch/json',
+                    params=places_params,
+                    timeout=10
+            ) as response:
+
+                if response.status == 200:
+                    places_data = await response.json()
+                    places = places_data.get('results', [])
+                    print(f"✅ Found {len(places)} attractions in {destination_city}")
+
+                    if places:
+                        # Format places data for frontend
+                        formatted_places = []
+                        for place in places[:10]:  # Top 10 places
+                            formatted_place = {
+                                'name': place.get('name', 'Unknown'),
+                                'rating': place.get('rating', 0),
+                                'price_level': place.get('price_level', 0),
+                                'types': place.get('types', []),
+                                'vicinity': place.get('vicinity', ''),
+                                'place_id': place.get('place_id', ''),
+                                'photos': place.get('photos', [])
+                            }
+                            formatted_places.append(formatted_place)
+
+                        # Show top 3 attractions in logs
+                        print("📍 Top attractions:")
+                        for i, place in enumerate(places[:3], 1):
+                            name = place['name']
+                            rating = place.get('rating', 'N/A')
+                            price_level = place.get('price_level', 'N/A')
+                            types = place.get('types', [])
+
+                            print(f"   {i}. {name}")
+                            print(f"      Rating: {rating}")
+                            print(f"      Price level: {price_level}")
+                            print(f"      Types: {', '.join(types[:2])}")
+
+                        return formatted_places
+                else:
+                    print(f"❌ Places search failed: {response.status}")
+                    return None
+    except Exception as e:
+        print(f"❌ Error getting places for {destination_city}: {str(e)}")
+        return None
+
+
+async def search_hotels_serp(destination_city: str, check_in_date: str = None, check_out_date: str = None,
+                             adults: int = 1, children: int = 0) -> Dict[str, Any]:
+    """Search hotels using SERP API for a destination city"""
+
     serp_key = os.getenv('SERP_API_KEY')
+    if not serp_key:
+        raise HTTPException(status_code=500, detail="SERP API key not configured")
 
-    if not gemini_key or not serp_key:
-        print("Missing API keys")
-        return
+    # Default dates if not provided (30 days from now for check-in, +2 days for check-out)
+    if not check_in_date:
+        check_in_date = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d')
+    if not check_out_date:
+        check_out_date = (datetime.strptime(check_in_date, '%Y-%m-%d') + timedelta(days=2)).strftime('%Y-%m-%d')
+
+    # Build SERP API parameters for hotels
+    serp_params = {
+        'api_key': serp_key,
+        'engine': 'google_hotels',
+        'q': destination_city,
+        'check_in_date': check_in_date,
+        'check_out_date': check_out_date,
+        'adults': adults,
+        'currency': 'USD',
+        'gl': 'us',
+        'hl': 'en'
+    }
+
+    # Add children if specified
+    if children > 0:
+        serp_params['children'] = children
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                    'https://serpapi.com/search',
+                    params=serp_params,
+                    timeout=30
+            ) as response:
+                if response.status == 200:
+                    hotel_data = await response.json()
+                    return hotel_data
+                else:
+                    error_text = await response.text()
+                    raise HTTPException(
+                        status_code=response.status,
+                        detail=f"SERP Hotels API error: {error_text}"
+                    )
+
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Hotel search timed out")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Hotel search failed: {str(e)}")
+
+
+def format_hotel_data(hotel_data: Dict[str, Any], search_params: Dict[str, Any]) -> list:
+    """Format hotel data for frontend consumption"""
+
+    properties = hotel_data.get('properties', [])
+    formatted_hotels = []
+
+    for hotel in properties:
+        formatted_hotel = {
+            'id': hotel.get('property_token', f"hotel_{len(formatted_hotels)}"),
+            'name': hotel.get('name', 'Unknown Hotel'),
+            'description': hotel.get('description', ''),
+            'rate_per_night': None,
+            'total_rate': None,
+            'currency': 'USD',
+            'rating': hotel.get('overall_rating', 0),
+            'review_count': hotel.get('reviews', 0),
+            'amenities': hotel.get('amenities', []),
+            'images': hotel.get('images', []),
+            'location': {
+                'address': hotel.get('location', ''),
+                'coordinates': hotel.get('gps_coordinates', {})
+            },
+            'booking_options': [],
+            'hotel_class': hotel.get('hotel_class', 0),
+            'check_in_time': hotel.get('check_in_time', ''),
+            'check_out_time': hotel.get('check_out_time', '')
+        }
+
+        # Extract rate information
+        rate_per_night = hotel.get('rate_per_night')
+        if rate_per_night:
+            formatted_hotel['rate_per_night'] = {
+                'lowest': rate_per_night.get('lowest', 0),
+                'extracted_lowest': rate_per_night.get('extracted_lowest', 0),
+                'before_taxes_fees': rate_per_night.get('before_taxes_fees', 0),
+                'extracted_before_taxes_fees': rate_per_night.get('extracted_before_taxes_fees', 0)
+            }
+
+        total_rate = hotel.get('total_rate')
+        if total_rate:
+            formatted_hotel['total_rate'] = {
+                'lowest': total_rate.get('lowest', 0),
+                'extracted_lowest': total_rate.get('extracted_lowest', 0),
+                'before_taxes_fees': total_rate.get('before_taxes_fees', 0),
+                'extracted_before_taxes_fees': total_rate.get('extracted_before_taxes_fees', 0)
+            }
+
+        # Extract booking options
+        if 'prices' in hotel:
+            booking_options = []
+            for price in hotel['prices']:
+                booking_option = {
+                    'source': price.get('source', 'Unknown'),
+                    'rate': price.get('rate', 0),
+                    'total': price.get('total', 0),
+                    'link': price.get('link', ''),
+                    'price_description': price.get('price_description', '')
+                }
+                booking_options.append(booking_option)
+            formatted_hotel['booking_options'] = booking_options
+
+        formatted_hotels.append(formatted_hotel)
+
+    return formatted_hotels
+
+
+def validate_travel_params(params: Dict[str, Any], required_fields: list) -> tuple[bool, list, str]:
+    """
+    Validate extracted travel parameters and generate follow-up questions if needed
+
+    Returns:
+        (is_valid, missing_fields, follow_up_question)
+    """
+    missing_fields = []
+
+    # Check required fields
+    for field in required_fields:
+        if field not in params or params[field] is None or params[field] == "":
+            missing_fields.append(field)
+
+    # Check for reasonable dates
+    if 'outbound_date' in params and params['outbound_date']:
+        try:
+            outbound = datetime.strptime(params['outbound_date'], '%Y-%m-%d')
+            if outbound < datetime.now() - timedelta(days=1):  # Allow today
+                missing_fields.append('outbound_date')
+        except ValueError:
+            missing_fields.append('outbound_date')
+
+    if missing_fields:
+        # Generate contextual follow-up question
+        questions = {
+            'departure_id': "Which city or airport are you departing from?",
+            'arrival_id': "Which city or airport is your destination?",
+            'destination_city': "What city would you like to visit?",
+            'outbound_date': "When would you like to travel? Please provide a specific date.",
+            'return_date': "When would you like to return? (or say 'one-way' if not returning)",
+            'adults': "How many adults will be traveling?",
+            'children': "How many children will be traveling?"
+        }
+
+        if len(missing_fields) == 1:
+            question = questions.get(missing_fields[0], f"Could you please specify {missing_fields[0]}?")
+        elif len(missing_fields) == 2:
+            field1, field2 = missing_fields[0], missing_fields[1]
+            q1 = questions.get(field1, field1)
+            q2 = questions.get(field2, field2)
+            question = f"{q1} Also, {q2.lower()}"
+        else:
+            # Multiple missing fields - ask for key ones first
+            priority_fields = ['departure_id', 'arrival_id', 'destination_city', 'outbound_date']
+            missing_priority = [f for f in missing_fields if f in priority_fields]
+
+            if missing_priority:
+                key_field = missing_priority[0]
+                question = questions.get(key_field, f"Could you please specify {key_field}?")
+            else:
+                question = f"Could you please provide more details about {', '.join(missing_fields[:2])}?"
+
+        return False, missing_fields, question
+
+    return True, [], ""
+
+async def parse_enhanced_travel_request(user_input: str) -> Dict[str, Any]:
+    """Use Gemini to parse travel request with both flight and destination info"""
+
+    gemini_key = os.getenv('GEMINI_API_KEY')
+    if not gemini_key:
+        raise HTTPException(status_code=500, detail="Gemini API key not configured")
 
     genai.configure(api_key=gemini_key)
     model = genai.GenerativeModel('gemini-2.5-flash')
 
     parse_prompt = f"""
-    Parse this flight request: "{user_input}"
+    Parse this travel request: "{user_input}"
 
-    Extract these exact parameters for SERP API:
+    Extract these exact parameters:
     {{
         "departure_id": "3-letter airport code",
         "arrival_id": "3-letter airport code",
+        "destination_city": "full destination city name for places search",
         "outbound_date": "YYYY-MM-DD",
         "return_date": "YYYY-MM-DD or null",
         "type": "1 or 2",
@@ -63,128 +368,609 @@ async def test_gemini_serp_integration():
     }}
 
     Rules:
-    - departure_id/arrival_id: Convert cities to codes (LA->LAX, Tokyo->NRT, NYC->JFK, Paris->CDG)
+    - departure_id/arrival_id: Convert cities to codes (LA->LAX, Tokyo->NRT, NYC->JFK, Paris->CDG, London->LHR, Boston->BOS)
+    - destination_city: Full city name for Google Places (Tokyo, Paris, London, etc)
     - type: "1" for round-trip, "2" for one-way
-    - return_date: null if one-way, calculate date if round-trip
-    - outbound_date: use specified date or 30 days from today
+    - return_date: null if one-way, calculate date if round-trip (default 7 days after outbound)
+    - outbound_date: use specified date or 30 days from today if not specified
     - adults: extract number or default 1
     - children: extract number or default 0
     - currency: always "USD"
     - hl: always "en"
 
-    Return ONLY the JSON object.
+    Return ONLY the JSON object, no other text.
     """
 
     try:
-        print("Gemini parsing...")
         response = await asyncio.to_thread(model.generate_content, parse_prompt)
 
-        # Extract JSON
+        # Extract JSON from response
         text = response.text.strip()
         if text.startswith('```json'):
             text = text[7:-3]
         elif text.startswith('```'):
             text = text[3:-3]
 
-        params_from_gemini = json.loads(text)
-
-        print("Extracted parameters:")
-        for key, value in params_from_gemini.items():
-            print(f"  {key}: {value}")
-
-        # Step 2: Use extracted parameters in SERP API
-        print("\nCalling SERP API...")
-
-        async with aiohttp.ClientSession() as session:
-            # Build SERP params using Gemini's extracted variables
-            params = {
-                'api_key': serp_key,
-                'engine': 'google_flights',
-                'departure_id': params_from_gemini['departure_id'],
-                'arrival_id': params_from_gemini['arrival_id'],
-                'outbound_date': params_from_gemini['outbound_date'],
-                'type': params_from_gemini['type'],
-                'adults': params_from_gemini['adults'],
-                'currency': params_from_gemini['currency'],
-                'hl': params_from_gemini['hl']
-            }
-
-            # Add return_date if not null
-            if params_from_gemini['return_date']:
-                params['return_date'] = params_from_gemini['return_date']
-
-            # Add children if > 0
-            if params_from_gemini['children'] > 0:
-                params['children'] = params_from_gemini['children']
-
-            print("SERP API parameters:")
-            for key, value in params.items():
-                if key != 'api_key':
-                    print(f"  {key}: {value}")
-
-            async with session.get('https://serpapi.com/search', params=params, timeout=30) as response:
-                if response.status == 200:
-                    flight_data = await response.json()
-
-                    # Check if we have flight data
-                    best_flights = flight_data.get('best_flights', [])
-                    other_flights = flight_data.get('other_flights', [])
-                    total_flights = len(best_flights) + len(other_flights)
-
-                    print(f"✅ SERP API working! Found {total_flights} flights")
-                    print(f"   Best flights: {len(best_flights)}")
-                    print(f"   Other flights: {len(other_flights)}")
-
-                    # Show sample flight from best flights
-                    if best_flights:
-                        sample_flight = best_flights[0]
-                        price = sample_flight.get('price', 'N/A')
-
-                        # Extract flight details
-                        flights = sample_flight.get('flights', [])
-                        if flights:
-                            first_flight = flights[0]
-                            airline = first_flight.get('airline', 'N/A')
-                            flight_number = first_flight.get('flight_number', 'N/A')
-                            departure_time = first_flight.get('departure_airport', {}).get('time', 'N/A')
-                            arrival_time = first_flight.get('arrival_airport', {}).get('time', 'N/A')
-                            duration = sample_flight.get('total_duration', 'N/A')
-                            layovers = len(sample_flight.get('layovers', []))
-
-                            print(f"📍 Sample flight details:")
-                            print(f"   Flight: {flight_number}")
-                            print(f"   Airline: {airline}")
-                            print(f"   Price: ${price}")
-                            print(f"   Departure: {departure_time}")
-                            print(f"   Arrival: {arrival_time}")
-                            print(f"   Duration: {duration}")
-                            print(f"   Stops: {layovers}")
-
-                            # Show booking options if available
-                            booking_options = sample_flight.get('booking_options', [])
-                            if booking_options:
-                                print(f"   Booking options: {len(booking_options)} available")
-                                print(f"   Primary booking: {booking_options[0].get('link', 'N/A')}")
-
-                    # Show search metadata
-                    search_metadata = flight_data.get('search_metadata', {})
-                    if search_metadata:
-                        print(f"🔍 Search info:")
-                        print(f"   Status: {search_metadata.get('status', 'N/A')}")
-                        print(f"   Processing time: {search_metadata.get('total_time_taken', 'N/A')}s")
-                        print(f"   Google Flights URL: {search_metadata.get('google_flights_url', 'N/A')}")
-
-                    return True
-                else:
-                    print(f"SERP API failed: {response.status}")
-                    text = await response.text()
-                    print(f"Response: {text}")
-                    return False
+        params = json.loads(text)
+        return params
 
     except Exception as e:
-        print(f"Error: {e}")
-        return False
+        raise HTTPException(status_code=500, detail=f"Failed to parse travel request: {str(e)}")
+
+
+async def parse_flight_request(user_input: str) -> Dict[str, Any]:
+    """Use Gemini to parse flight request into SERP API parameters (basic version)"""
+
+    gemini_key = os.getenv('GEMINI_API_KEY')
+    if not gemini_key:
+        raise HTTPException(status_code=500, detail="Gemini API key not configured")
+
+    genai.configure(api_key=gemini_key)
+    model = genai.GenerativeModel('gemini-2.5-flash')
+
+    parse_prompt = f"""
+    Parse this flight request: "{user_input}"
+
+    Extract these exact parameters for SERP API:
+    {{
+        "departure_id": "3-letter airport code",
+        "arrival_id": "3-letter airport code", 
+        "outbound_date": "YYYY-MM-DD",
+        "return_date": "YYYY-MM-DD or null",
+        "type": "1 or 2",
+        "adults": number,
+        "children": number,
+        "currency": "USD",
+        "hl": "en"
+    }}
+
+    Rules:
+    - departure_id/arrival_id: Convert cities to codes (LA->LAX, Tokyo->NRT, NYC->JFK, Paris->CDG, London->LHR, Boston->BOS)
+    - type: "1" for round-trip, "2" for one-way
+    - return_date: null if one-way, calculate date if round-trip (default 7 days after outbound)
+    - outbound_date: use specified date or 30 days from today if not specified
+    - adults: extract number or default 1
+    - children: extract number or default 0
+    - currency: always "USD" 
+    - hl: always "en"
+
+    Return ONLY the JSON object, no other text.
+    """
+
+    try:
+        response = await asyncio.to_thread(model.generate_content, parse_prompt)
+
+        # Extract JSON from response
+        text = response.text.strip()
+        if text.startswith('```json'):
+            text = text[7:-3]
+        elif text.startswith('```'):
+            text = text[3:-3]
+
+        params = json.loads(text)
+        return params
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to parse flight request: {str(e)}")
+
+
+async def search_flights_serp(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Search flights using SERP API with extracted parameters"""
+
+    serp_key = os.getenv('SERP_API_KEY')
+    if not serp_key:
+        raise HTTPException(status_code=500, detail="SERP API key not configured")
+
+    # Build SERP API parameters
+    serp_params = {
+        'api_key': serp_key,
+        'engine': 'google_flights',
+        'departure_id': params['departure_id'],
+        'arrival_id': params['arrival_id'],
+        'outbound_date': params['outbound_date'],
+        'type': params['type'],
+        'adults': params['adults'],
+        'currency': params['currency'],
+        'hl': params['hl']
+    }
+
+    # Add optional parameters
+    if params['return_date']:
+        serp_params['return_date'] = params['return_date']
+    if params['children'] > 0:
+        serp_params['children'] = params['children']
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                    'https://serpapi.com/search',
+                    params=serp_params,
+                    timeout=30
+            ) as response:
+                if response.status == 200:
+                    flight_data = await response.json()
+                    return flight_data
+                else:
+                    error_text = await response.text()
+                    raise HTTPException(
+                        status_code=response.status,
+                        detail=f"SERP API error: {error_text}"
+                    )
+
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Flight search timed out")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Flight search failed: {str(e)}")
+
+
+def format_enhanced_flight_data(flight_data: Dict[str, Any], extracted_params: Dict[str, Any],
+                                places_data: Optional[list] = None) -> Dict[str, Any]:
+    """Format flight data with places integration for frontend consumption"""
+
+    best_flights = flight_data.get('best_flights', [])
+    other_flights = flight_data.get('other_flights', [])
+    search_metadata = flight_data.get('search_metadata', {})
+
+    # Format flights for easier frontend consumption
+    formatted_flights = []
+
+    for flight in best_flights + other_flights:
+        formatted_flight = {
+            'id': flight.get('flight_id', f"flight_{len(formatted_flights)}"),
+            'price': flight.get('price', 0),
+            'currency': flight.get('currency', 'USD'),
+            'airline': None,
+            'flight_number': None,
+            'departure_time': None,
+            'arrival_time': None,
+            'duration': flight.get('total_duration', 'N/A'),
+            'stops': len(flight.get('layovers', [])),
+            'booking_options': flight.get('booking_options', []),
+            'flights': flight.get('flights', [])
+        }
+
+        # Extract first flight details
+        flights = flight.get('flights', [])
+        if flights:
+            first_flight = flights[0]
+            formatted_flight.update({
+                'airline': first_flight.get('airline', 'N/A'),
+                'flight_number': first_flight.get('flight_number', 'N/A'),
+                'departure_time': first_flight.get('departure_airport', {}).get('time', 'N/A'),
+                'arrival_time': first_flight.get('arrival_airport', {}).get('time', 'N/A'),
+            })
+
+        formatted_flights.append(formatted_flight)
+
+    result = {
+        'flights': formatted_flights,
+        'search_params': extracted_params,
+        'total_results': len(formatted_flights),
+        'best_flights_count': len(best_flights),
+        'other_flights_count': len(other_flights),
+        'search_metadata': search_metadata,
+        'source': 'serp_api'
+    }
+
+    # Add places data if available
+    if places_data:
+        result['places'] = places_data
+        result['destination_city'] = extracted_params.get('destination_city', 'Unknown')
+
+    return result
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    print("🚀 Starting AI Travel Agent...")
+    print("✅ REST API ready!")
+    yield
+    # Shutdown
+    print("🔄 Shutting down...")
+
+
+app = FastAPI(title="AI Travel Agent API", lifespan=lifespan)
+
+# CORS for frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.post("/api/flights/search", response_model=FlightSearchResponse)
+async def search_flights(request: FlightSearchRequest):
+    """
+    Search for flights based on natural language input
+
+    Example requests:
+    - "Round trip from Los Angeles to Tokyo for 2 people departing January 15th"
+    - "One way flight from NYC to Paris for 3 adults and 2 children"
+    - "Business class round trip Boston to London departing next month"
+    """
+
+    try:
+        # Step 1: Parse the natural language request
+        extracted_params = await parse_flight_request(request.message)
+
+        # Step 2: Validate required parameters
+        required_fields = ['departure_id', 'arrival_id', 'outbound_date']
+        is_valid, missing_fields, follow_up_question = validate_travel_params(extracted_params, required_fields)
+
+        if not is_valid:
+            print(f"❓ Missing flight info: {missing_fields}")
+            return FlightSearchResponse(
+                success=True,  # Still successful, just needs clarification
+                needs_clarification=True,
+                follow_up_question=follow_up_question,
+                missing_info=missing_fields,
+                extracted_params=extracted_params
+            )
+
+        # Step 3: Search flights using SERP API
+        flight_data = await search_flights_serp(extracted_params)
+
+        # Step 4: Format data for frontend (flights only)
+        formatted_data = format_enhanced_flight_data(flight_data, extracted_params)
+
+        return FlightSearchResponse(
+            success=True,
+            data=formatted_data,
+            extracted_params=extracted_params
+        )
+
+    except HTTPException as e:
+        return FlightSearchResponse(
+            success=False,
+            error=e.detail
+        )
+    except Exception as e:
+        return FlightSearchResponse(
+            success=False,
+            error=f"Unexpected error: {str(e)}"
+        )
+
+
+@app.post("/api/places/search", response_model=PlacesSearchResponse)
+async def search_places(request: PlacesSearchRequest):
+    """
+    Search for tourist attractions and places in a destination city
+
+    Example requests:
+    - destination_city: "Tokyo"
+    - destination_city: "Paris"
+    - destination_city: "London"
+    """
+
+    try:
+        if not request.destination_city or request.destination_city.strip() == "":
+            return PlacesSearchResponse(
+                success=True,
+                needs_clarification=True,
+                follow_up_question="Which city would you like me to find attractions for?"
+            )
+
+        places_key = os.getenv('GOOGLE_PLACES_API_KEY')
+        if not places_key:
+            return PlacesSearchResponse(
+                success=False,
+                error="Google Places API key not configured"
+            )
+
+        # Get places data for the destination
+        places_data = await get_places_for_destination(request.destination_city, places_key)
+
+        if places_data is None:
+            return PlacesSearchResponse(
+                success=False,
+                error=f"Could not find places for {request.destination_city}"
+            )
+
+        return PlacesSearchResponse(
+            success=True,
+            data=places_data,
+            destination_city=request.destination_city
+        )
+
+    except Exception as e:
+        return PlacesSearchResponse(
+            success=False,
+            error=f"Unexpected error: {str(e)}"
+        )
+
+
+@app.post("/api/travel/search", response_model=CombinedTravelResponse)
+async def combined_travel_search(request: CombinedTravelRequest):
+    """
+    Combined travel search that calls flights, hotels, and places endpoints
+
+    Example requests:
+    - "Round trip from Los Angeles to Tokyo for 2 people departing January 15th"
+    - "Plan a trip to Paris from NYC with attractions"
+    - "Flight and activities for London from Boston"
+
+    Returns combined results from:
+    - Flights search
+    - Hotels search
+    - Places search
+    """
+
+    try:
+        print(f"🌍 Combined travel search: {request.message}")
+
+        # Step 1: Parse the travel request to validate we have enough info
+        extracted_params = await parse_enhanced_travel_request(request.message)
+
+        # Step 2: Validate required parameters for complete travel search
+        required_fields = ['departure_id', 'arrival_id', 'destination_city', 'outbound_date']
+        is_valid, missing_fields, follow_up_question = validate_travel_params(extracted_params, required_fields)
+
+        if not is_valid:
+            print(f"❓ Missing travel info for combined search: {missing_fields}")
+            return CombinedTravelResponse(
+                success=True,  # Still successful, just needs clarification
+                needs_clarification=True,
+                follow_up_question=follow_up_question,
+                missing_info=missing_fields
+            )
+
+        # Step 3: Call individual endpoints concurrently
+        print("🔄 Calling flights, hotels, and places endpoints...")
+
+        # Create request objects for each endpoint
+        flight_request = FlightSearchRequest(message=request.message, user_id=request.user_id)
+        hotel_request = HotelSearchRequest(message=request.message, user_id=request.user_id)
+        places_request = PlacesSearchRequest(destination_city=extracted_params['destination_city'])
+
+        # Call all three endpoints concurrently
+        flight_task = search_flights(flight_request)
+        hotel_task = search_hotels(hotel_request)
+        places_task = search_places(places_request)
+
+        # Wait for all results
+        flight_result, hotel_result, places_result = await asyncio.gather(
+            flight_task, hotel_task, places_task, return_exceptions=True
+        )
+
+        # Step 4: Process results and handle any errors
+        flights_data = None
+        hotels_data = None
+        places_data = None
+        errors = []
+
+        # Process flight results
+        if isinstance(flight_result, Exception):
+            errors.append(f"Flights: {str(flight_result)}")
+        elif flight_result.success and flight_result.data:
+            flights_data = flight_result.data
+        elif flight_result.needs_clarification:
+            # If flights need clarification, the combined search should too
+            return CombinedTravelResponse(
+                success=True,
+                needs_clarification=True,
+                follow_up_question=flight_result.follow_up_question,
+                missing_info=flight_result.missing_info
+            )
+
+        # Process hotel results
+        if isinstance(hotel_result, Exception):
+            errors.append(f"Hotels: {str(hotel_result)}")
+        elif hotel_result.success and hotel_result.data:
+            hotels_data = hotel_result.data
+
+        # Process places results
+        if isinstance(places_result, Exception):
+            errors.append(f"Places: {str(places_result)}")
+        elif places_result.success and places_result.data:
+            places_data = places_result.data
+
+        # Step 5: Log results
+        print(f"✅ Combined search results:")
+        print(f"   🛫 Flights: {len(flights_data.get('flights', [])) if flights_data else 0} found")
+        print(f"   🏨 Hotels: {len(hotels_data) if hotels_data else 0} found")
+        print(f"   📍 Places: {len(places_data) if places_data else 0} found")
+
+        if errors:
+            print(f"⚠️ Some errors occurred: {'; '.join(errors)}")
+
+        # Step 6: Return combined results
+        return CombinedTravelResponse(
+            success=True,
+            flights=flights_data,
+            hotels=hotels_data,
+            places=places_data,
+            search_params={
+                'message': request.message,
+                'extracted_params': extracted_params,
+                'user_id': request.user_id,
+                'conversation_id': request.conversation_id,
+                'errors': errors if errors else None
+            }
+        )
+
+    except HTTPException as e:
+        return CombinedTravelResponse(
+            success=False,
+            error=e.detail
+        )
+    except Exception as e:
+        return CombinedTravelResponse(
+            success=False,
+            error=f"Unexpected error: {str(e)}"
+        )
+
+    except HTTPException as e:
+        return CombinedTravelResponse(
+            success=False,
+            error=e.detail
+        )
+    except Exception as e:
+        return CombinedTravelResponse(
+            success=False,
+            error=f"Unexpected error: {str(e)}"
+        )
+
+
+@app.post("/api/hotels/search", response_model=HotelSearchResponse)
+async def search_hotels(request: HotelSearchRequest):
+    """
+    Search for hotels based on natural language travel input (uses same parsing as flights)
+
+    Example requests:
+    - "Round trip from Los Angeles to Tokyo for 2 people departing January 15th"
+    - "Trip to Paris from NYC, staying 3 nights"
+    - "Business trip to London from Boston for 1 week"
+
+    Optional overrides:
+    - check_in_date: "2025-02-15" (overrides parsed date)
+    - check_out_date: "2025-02-18" (overrides parsed date)
+    - adults: 3 (overrides parsed number)
+    - children: 1 (overrides parsed number)
+    """
+
+    try:
+        # Step 1: Parse the travel request to extract destination and dates
+        print(f"🏨 Parsing travel request for hotels: {request.message}")
+        extracted_params = await parse_enhanced_travel_request(request.message)
+
+        # Step 2: Validate required information for hotels
+        destination_city = extracted_params.get('destination_city')
+        outbound_date = extracted_params.get('outbound_date')
+
+        missing_info = []
+        if not destination_city:
+            missing_info.append('destination_city')
+        if not outbound_date:
+            missing_info.append('outbound_date')
+
+        if missing_info:
+            questions = {
+                'destination_city': "Which city are you looking for hotels in?",
+                'outbound_date': "When do you need the hotel? Please provide your check-in date."
+            }
+
+            if len(missing_info) == 1:
+                question = questions.get(missing_info[0])
+            else:
+                question = "Which city are you looking for hotels in, and when do you need to check in?"
+
+            return HotelSearchResponse(
+                success=True,
+                needs_clarification=True,
+                follow_up_question=question,
+                missing_info=missing_info
+            )
+
+        # Step 3: Use extracted dates or overrides
+        check_in_date = request.check_in_date or extracted_params.get('outbound_date')
+        check_out_date = request.check_out_date or extracted_params.get('return_date')
+
+        # If no return date (one-way flight), default to 2 nights
+        if not check_out_date and check_in_date:
+            check_out_date = (datetime.strptime(check_in_date, '%Y-%m-%d') + timedelta(days=2)).strftime('%Y-%m-%d')
+
+        # Use extracted passenger counts or overrides
+        adults = request.adults if request.adults is not None else extracted_params.get('adults', 1)
+        children = request.children if request.children is not None else extracted_params.get('children', 0)
+
+        print(f"🏨 Searching hotels in: {destination_city}")
+        print(f"📅 Check-in: {check_in_date}, Check-out: {check_out_date}")
+        print(f"👥 Adults: {adults}, Children: {children}")
+
+        # Step 4: Search hotels using SERP API
+        hotel_data = await search_hotels_serp(
+            destination_city=destination_city,
+            check_in_date=check_in_date,
+            check_out_date=check_out_date,
+            adults=adults,
+            children=children
+        )
+
+        # Step 5: Format hotel data for frontend
+        formatted_hotels = format_hotel_data(hotel_data, {
+            'destination_city': destination_city,
+            'check_in_date': check_in_date,
+            'check_out_date': check_out_date,
+            'adults': adults,
+            'children': children
+        })
+
+        print(f"✅ Found {len(formatted_hotels)} hotels in {destination_city}")
+
+        # Log top 3 hotels
+        if formatted_hotels:
+            print("🏨 Top hotels:")
+            for i, hotel in enumerate(formatted_hotels[:3], 1):
+                name = hotel['name']
+                rating = hotel.get('rating', 'N/A')
+                rate = hotel.get('rate_per_night', {}).get('lowest', 'N/A') if hotel.get('rate_per_night') else 'N/A'
+
+                print(f"   {i}. {name}")
+                print(f"      Rating: {rating}")
+                print(f"      Rate per night: ${rate}" if rate != 'N/A' else f"      Rate per night: {rate}")
+
+        return HotelSearchResponse(
+            success=True,
+            data=formatted_hotels,
+            search_params={
+                'destination_city': destination_city,
+                'check_in_date': check_in_date,
+                'check_out_date': check_out_date,
+                'adults': adults,
+                'children': children,
+                'extracted_from_message': request.message,
+                'overrides_used': {
+                    'check_in_date': request.check_in_date is not None,
+                    'check_out_date': request.check_out_date is not None,
+                    'adults': request.adults is not None,
+                    'children': request.children is not None
+                }
+            }
+        )
+
+    except HTTPException as e:
+        return HotelSearchResponse(
+            success=False,
+            error=e.detail
+        )
+    except Exception as e:
+        return HotelSearchResponse(
+            success=False,
+            error=f"Unexpected error: {str(e)}"
+        )
+
+
+@app.get("/api/health")
+async def health_check():
+    return {
+        "status": "healthy",
+        "gemini": "connected" if os.getenv('GEMINI_API_KEY') else "needs_api_key",
+        "flight_search": "available" if os.getenv('GEMINI_API_KEY') and os.getenv('SERP_API_KEY') else "needs_api_keys",
+        "hotel_search": "available" if os.getenv('SERP_API_KEY') else "needs_serp_api_key",
+        "google_places": "available" if os.getenv('GOOGLE_PLACES_API_KEY') else "needs_api_key",
+        "enhanced_travel": "available" if all([
+            os.getenv('GEMINI_API_KEY'),
+            os.getenv('SERP_API_KEY'),
+            os.getenv('GOOGLE_PLACES_API_KEY')
+        ]) else "partial_keys"
+    }
+
+
+@app.get("/")
+async def root():
+    return {"message": "AI Travel Agent API - Ready for hackathon! 🚀"}
 
 
 if __name__ == "__main__":
-    asyncio.run(test_gemini_serp_integration())
+    import uvicorn
+
+    print("🚀 Starting FastAPI server...")
+    print("📍 Server will be available at: http://localhost:8000")
+    print("📖 API docs will be available at: http://localhost:8000/docs")
+    print("🔧 Health check: http://localhost:8000/api/health")
+
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
