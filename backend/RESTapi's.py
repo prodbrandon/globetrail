@@ -171,11 +171,11 @@ async def search_hotels_serp(destination_city: str, check_in_date: str = None, c
     if not serp_key:
         raise HTTPException(status_code=500, detail="SERP API key not configured")
 
-    # Default dates if not provided (30 days from now for check-in, +2 days for check-out)
+    # Default dates if not provided (30 days from now for check-in, 33 days from now for check-out)
     if not check_in_date:
         check_in_date = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d')
     if not check_out_date:
-        check_out_date = (datetime.strptime(check_in_date, '%Y-%m-%d') + timedelta(days=2)).strftime('%Y-%m-%d')
+        check_out_date = (datetime.now() + timedelta(days=33)).strftime('%Y-%m-%d')
 
     # Build SERP API parameters for hotels
     serp_params = {
@@ -187,7 +187,9 @@ async def search_hotels_serp(destination_city: str, check_in_date: str = None, c
         'adults': adults,
         'currency': 'USD',
         'gl': 'us',
-        'hl': 'en'
+        'hl': 'en',
+        'booking_options': 'true',
+        'include_offers': 'true'
     }
 
     # Add children if specified
@@ -265,8 +267,10 @@ def format_hotel_data(hotel_data: Dict[str, Any], search_params: Dict[str, Any])
             }
 
         # Extract booking options
+        booking_options = []
+
+        # Check 'prices' field
         if 'prices' in hotel:
-            booking_options = []
             for price in hotel['prices']:
                 booking_option = {
                     'source': price.get('source', 'Unknown'),
@@ -276,8 +280,32 @@ def format_hotel_data(hotel_data: Dict[str, Any], search_params: Dict[str, Any])
                     'price_description': price.get('price_description', '')
                 }
                 booking_options.append(booking_option)
-            formatted_hotel['booking_options'] = booking_options
 
+        # Check 'offers' field (another common location)
+        if 'offers' in hotel:
+            for offer in hotel['offers']:
+                booking_option = {
+                    'source': offer.get('partner', offer.get('source', 'Unknown')),
+                    'rate': offer.get('rate', 0),
+                    'total': offer.get('total', 0),
+                    'link': offer.get('url', offer.get('link', '')),
+                    'price_description': offer.get('description', '')
+                }
+                booking_options.append(booking_option)
+
+        # Check 'booking_options' field directly
+        if 'booking_options' in hotel:
+            for option in hotel['booking_options']:
+                booking_option = {
+                    'source': option.get('partner', option.get('source', 'Unknown')),
+                    'rate': option.get('rate', 0),
+                    'total': option.get('total', 0),
+                    'link': option.get('url', option.get('link', '')),
+                    'price_description': option.get('description', '')
+                }
+                booking_options.append(option)
+
+        formatted_hotel['booking_options'] = booking_options
         formatted_hotels.append(formatted_hotel)
 
     return formatted_hotels
