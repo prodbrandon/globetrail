@@ -1,48 +1,16 @@
+import asyncio
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os
 from dotenv import load_dotenv
-from contextlib import asynccontextmanager
 from gemini_client import GeminiTravelAgent
-from simple_mcp_manager import SimpleMCPManager
+from mcp_manager import MCPManager
 
 load_dotenv()
 
-# Global instances
-travel_agent = None
-mcp_manager = None
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Startup
-    global travel_agent, mcp_manager
-    print("🚀 Starting AI Travel Agent...")
-
-    try:
-        # Initialize Simple MCP Manager
-        mcp_manager = SimpleMCPManager()
-        await mcp_manager.initialize_servers()
-
-        # Initialize Gemini Travel Agent
-        travel_agent = GeminiTravelAgent(mcp_manager)
-        await travel_agent.initialize()
-
-        print("✅ All systems ready!")
-    except Exception as e:
-        print(f"❌ Startup failed: {str(e)}")
-        # Continue anyway for debugging
-
-    yield
-
-    # Shutdown
-    print("🔄 Shutting down...")
-    if mcp_manager:
-        await mcp_manager.shutdown()
-
-
-app = FastAPI(title="AI Travel Agent API", lifespan=lifespan)
+app = FastAPI(title="AI Travel Agent API")
 
 # CORS for frontend
 app.add_middleware(
@@ -53,16 +21,38 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Global instances
+travel_agent = None
+mcp_manager = None
+
 
 class TravelRequest(BaseModel):
     message: str
     user_id: str = "hackathon_user"
+    conversation_id: str = None  # Track conversation context
+    force_refresh: bool = False  # Force new API calls
 
 
 class TravelResponse(BaseModel):
     success: bool
     data: dict = None
     error: str = None
+
+
+@app.on_startup
+async def startup_event():
+    global travel_agent, mcp_manager
+    print("🚀 Starting AI Travel Agent...")
+
+    # Initialize MCP Manager
+    mcp_manager = MCPManager()
+    await mcp_manager.initialize_servers()
+
+    # Initialize Gemini Travel Agent
+    travel_agent = GeminiTravelAgent(mcp_manager)
+    await travel_agent.initialize()
+
+    print("✅ All systems ready!")
 
 
 @app.post("/api/plan-trip", response_model=TravelResponse)
@@ -73,8 +63,18 @@ async def plan_trip(request: TravelRequest):
 
         print(f"📝 Planning trip: {request.message}")
 
-        # Use Gemini to plan the trip
-        result = await travel_agent.plan_trip(request.message)
+        # Generate conversation ID if not provided
+        conversation_id = request.conversation_id or f"conv_{request.user_id}_{int(asyncio.get_event_loop().time())}"
+
+        # Use Gemini to plan the trip with smart caching
+        result = await travel_agent.plan_trip(
+            request.message,
+            conversation_id=conversation_id,
+            force_refresh=request.force_refresh
+        )
+
+        # Add conversation ID to response
+        result["conversation_id"] = conversation_id
 
         return TravelResponse(
             success=True,

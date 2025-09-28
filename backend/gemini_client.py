@@ -10,6 +10,10 @@ class GeminiTravelAgent:
         self.mcp_manager = mcp_manager
         self.model = None
 
+        # Conversation memory and caching
+        self.conversation_history = {}  # {conversation_id: {messages: [], last_travel_data: {}}}
+        self.travel_data_cache = {}  # {cache_key: travel_data}
+
     async def initialize(self):
         """Initialize Gemini AI client"""
         api_key = os.getenv('GEMINI_API_KEY')
@@ -17,38 +21,148 @@ class GeminiTravelAgent:
             raise ValueError("GEMINI_API_KEY not found in environment")
 
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-2.5-flash')
+        self.model = genai.GenerativeModel('gemini-1.5-pro')
         print("✅ Gemini client initialized")
 
-    async def plan_trip(self, user_request: str) -> Dict[str, Any]:
-        """Main trip planning function using Gemini + MCP servers"""
+    async def plan_trip(self, user_request: str, conversation_id: str = None, force_refresh: bool = False) -> Dict[
+        str, Any]:
+        """Main trip planning function with smart caching"""
 
         try:
-            # Step 1: Parse user request with Gemini
-            parsed_request = await self._parse_travel_request(user_request)
-            print(f"📋 Parsed request: {parsed_request}")
+            # Initialize conversation if needed
+            if conversation_id and conversation_id not in self.conversation_history:
+                self.conversation_history[conversation_id] = {
+                    "messages": [],
+                    "last_travel_data": {},
+                    "last_parsed_request": {}
+                }
 
-            # Step 2: Call MCP servers to get travel data
-            travel_data = await self._gather_travel_data(parsed_request)
-            print(f"📊 Gathered travel data: {len(travel_data)} sources")
+            # Add current message to history
+            if conversation_id:
+                self.conversation_history[conversation_id]["messages"].append({
+                    "role": "user",
+                    "content": user_request,
+                    "timestamp": asyncio.get_event_loop().time()
+                })
 
-            # Step 3: Cluster and optimize results
-            clustered_results = await self._cluster_results(travel_data, parsed_request)
-            print(f"🎯 Created {len(clustered_results.get('clusters', []))} clusters")
+            # Step 1: Determine if this needs new travel data
+            needs_new_data = await self._needs_travel_data_refresh(user_request, conversation_id, force_refresh)
 
-            # Step 4: Generate final recommendations
-            recommendations = await self._generate_recommendations(clustered_results, parsed_request)
+            if needs_new_data:
+                print("🔄 New travel search required - calling APIs")
+
+                # Parse request and get fresh data
+                parsed_request = await self._parse_travel_request(user_request, conversation_id)
+                travel_data = await self._gather_travel_data(parsed_request)
+                clusters = await self._create_clusters(travel_data)
+
+                # Cache the results
+                if conversation_id:
+                    self.conversation_history[conversation_id]["last_travel_data"] = {
+                        "travel_data": travel_data,
+                        "clusters": clusters,
+                        "parsed_request": parsed_request
+                    }
+
+            else:
+                print("💡 Using cached data + Gemini-only response")
+
+                # Use cached data
+                if conversation_id and self.conversation_history[conversation_id]["last_travel_data"]:
+                    cached = self.conversation_history[conversation_id]["last_travel_data"]
+                    travel_data = cached["travel_data"]
+                    clusters = cached["clusters"]
+                    parsed_request = cached["parsed_request"]
+                else:
+                    # No cached data available
+                    travel_data = {"flights": [], "hotels": [], "activities": [], "restaurants": []}
+                    clusters = {"clusters": []}
+                    parsed_request = {"destination": "Unknown"}
+
+            # Step 2: Generate response (always use Gemini for this)
+            recommendations = await self._generate_contextual_response(
+                user_request, travel_data, clusters, parsed_request, conversation_id
+            )
+
+            # Add assistant response to history
+            if conversation_id:
+                self.conversation_history[conversation_id]["messages"].append({
+                    "role": "assistant",
+                    "content": str(recommendations),
+                    "timestamp": asyncio.get_event_loop().time()
+                })
 
             return {
                 "request": parsed_request,
-                "clusters": clustered_results,
+                "travel_data": travel_data,
+                "clusters": clusters,
                 "recommendations": recommendations,
-                "raw_data": travel_data
+                "used_cache": not needs_new_data,
+                "conversation_id": conversation_id
             }
 
         except Exception as e:
             print(f"❌ Error in trip planning: {str(e)}")
             raise e
+
+    async def _needs_travel_data_refresh(self, user_request: str, conversation_id: str = None,
+                                         force_refresh: bool = False) -> bool:
+        """Determine if we need to call travel APIs or can use cached data + Gemini"""
+
+        if force_refresh:
+            return True
+
+        if not conversation_id or conversation_id not in self.conversation_history:
+            return True  # First message always needs data
+
+        # Check if we have any cached travel data
+        cached_data = self.conversation_history[conversation_id].get("last_travel_data", {})
+        if not cached_data:
+            return True
+
+        # Use Gemini to classify the query type
+        classification_prompt = f"""
+        Analyze this user message and determine if it requires NEW travel data (flights, hotels, activities) or can be answered using EXISTING travel data.
+
+        User message: "{user_request}"
+
+        Return ONLY "NEW_DATA" or "EXISTING_DATA":
+
+        NEW_DATA examples:
+        - "Actually, let's go to Paris instead of Tokyo"
+        - "Change dates to next month"
+        - "I want to increase my budget to $3000"
+        - "Find flights from New York instead"
+        - "Show me hotels in a different area"
+
+        EXISTING_DATA examples:
+        - "Tell me more about that first hotel"
+        - "What's included in the luxury package?"
+        - "Explain the difference between these flight options"
+        - "Which option is best for families?"
+        - "What are the pros and cons?"
+        - "Can you summarize the recommendations?"
+        - "I like option 2, tell me more"
+        """
+
+        try:
+            response = await asyncio.to_thread(
+                self.model.generate_content,
+                classification_prompt,
+                generation_config=genai.types.GenerationConfig(
+                    temperature=0.1,
+                    candidate_count=1,
+                )
+            )
+
+            classification = response.text.strip().upper()
+            print(f"🤖 Query classification: {classification}")
+
+            return "NEW_DATA" in classification
+
+        except Exception as e:
+            print(f"⚠️ Classification failed, defaulting to cached data: {str(e)}")
+            return False  # Default to using cached data on error
 
     async def _parse_travel_request(self, user_request: str) -> Dict[str, Any]:
         """Use Gemini to extract structured data from natural language"""
