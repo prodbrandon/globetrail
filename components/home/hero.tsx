@@ -8,7 +8,7 @@ import { useEffect, useRef, useState } from "react";
 // Interactive particle background component
 const InteractiveParticles = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+  const mousePos = useRef({ x: 0, y: 0 });
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -48,35 +48,36 @@ const InteractiveParticles = () => {
         this.color = colors[Math.floor(Math.random() * colors.length)];
       }
 
-      update(canvasWidth: number, canvasHeight: number) {
-        // Natural floating motion
-        this.vx += (Math.random() - 0.5) * 0.02;
-        this.vy += (Math.random() - 0.5) * 0.02;
+      update(canvasWidth: number, canvasHeight: number, mouseX: number, mouseY: number) {
+        // Much gentler natural floating motion
+        this.vx += (Math.random() - 0.5) * 0.005;
+        this.vy += (Math.random() - 0.5) * 0.005;
 
-        // Mouse interaction with stronger repulsion
-        const dx = mousePos.x - this.x;
-        const dy = mousePos.y - this.y;
+        // Mouse interaction with much slower, consistent repulsion
+        const dx = mouseX - this.x;
+        const dy = mouseY - this.y;
         const distance = Math.sqrt(dx * dx + dy * dy);
-        const maxDistance = 200;
+        const maxDistance = 150;
 
         if (distance < maxDistance && distance > 0) {
           const force = (maxDistance - distance) / maxDistance;
           const angle = Math.atan2(dy, dx);
-          const repulsionStrength = force * force * 0.8;
+          // Much slower repulsion strength - reduced from 0.8 to 0.05
+          const repulsionStrength = force * force * 0.05;
           this.vx -= Math.cos(angle) * repulsionStrength;
           this.vy -= Math.sin(angle) * repulsionStrength;
         }
 
         // Gentle return to original position
-        this.vx += (this.originalX - this.x) * 0.002;
-        this.vy += (this.originalY - this.y) * 0.002;
+        this.vx += (this.originalX - this.x) * 0.001;
+        this.vy += (this.originalY - this.y) * 0.001;
 
-        // Apply velocity with less damping for more floating effect
-        this.vx *= 0.995;
-        this.vy *= 0.995;
+        // Apply stronger damping for slower, more controlled movement
+        this.vx *= 0.98;
+        this.vy *= 0.98;
 
-        // Limit velocity to prevent particles from moving too fast
-        const maxVelocity = 3;
+        // Much lower velocity limit for slower movement
+        const maxVelocity = 0.8;
         if (Math.abs(this.vx) > maxVelocity) this.vx = Math.sign(this.vx) * maxVelocity;
         if (Math.abs(this.vy) > maxVelocity) this.vy = Math.sign(this.vy) * maxVelocity;
 
@@ -118,7 +119,7 @@ const InteractiveParticles = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       particles.forEach(particle => {
-        particle.update(canvas.width, canvas.height);
+        particle.update(canvas.width, canvas.height, mousePos.current.x, mousePos.current.y);
         particle.draw(ctx);
       });
 
@@ -147,10 +148,10 @@ const InteractiveParticles = () => {
     return () => {
       window.removeEventListener('resize', resizeCanvas);
     };
-  }, [mousePos]);
+  }, []);
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    setMousePos({ x: e.clientX, y: e.clientY });
+    mousePos.current = { x: e.clientX, y: e.clientY };
   };
 
   return (
