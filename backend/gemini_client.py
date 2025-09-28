@@ -21,7 +21,7 @@ class GeminiTravelAgent:
             raise ValueError("GEMINI_API_KEY not found in environment")
 
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-1.5-pro')
+        self.model = genai.GenerativeModel('gemini-2.5-flash')
         print("✅ Gemini client initialized")
 
     async def plan_trip(self, user_request: str, conversation_id: str = None, force_refresh: bool = False) -> Dict[
@@ -67,17 +67,17 @@ class GeminiTravelAgent:
             else:
                 print("💡 Using cached data + Gemini-only response")
 
-                # Use cached data
+                # Use cached data or create empty structure
                 if conversation_id and self.conversation_history[conversation_id]["last_travel_data"]:
                     cached = self.conversation_history[conversation_id]["last_travel_data"]
                     travel_data = cached["travel_data"]
                     clusters = cached["clusters"]
                     parsed_request = cached["parsed_request"]
                 else:
-                    # No cached data available
+                    # No cached data available - create minimal structure
                     travel_data = {"flights": [], "hotels": [], "activities": [], "restaurants": []}
                     clusters = {"clusters": []}
-                    parsed_request = {"destination": "Unknown"}
+                    parsed_request = await self._parse_travel_request(user_request, conversation_id)
 
             # Step 2: Generate response (always use Gemini for this)
             recommendations = await self._generate_contextual_response(
@@ -164,38 +164,51 @@ class GeminiTravelAgent:
             print(f"⚠️ Classification failed, defaulting to cached data: {str(e)}")
             return False  # Default to using cached data on error
 
-    async def _parse_travel_request(self, user_request: str) -> Dict[str, Any]:
-        """Use Gemini to extract structured data from natural language"""
+    async def _parse_travel_request(self, user_request: str, conversation_id: str = None) -> Dict[str, Any]:
+        """Parse natural language request with conversation context"""
+
+        # Build context from conversation history
+        context = ""
+        if conversation_id and conversation_id in self.conversation_history:
+            history = self.conversation_history[conversation_id]["messages"]
+            if history:
+                context = "Previous conversation:\n"
+                for msg in history[-4:]:  # Last 4 messages for context
+                    context += f"{msg['role']}: {msg['content'][:100]}...\n"
+                context += "\n"
+
+        if not self.model:
+            # Fallback parsing without Gemini
+            return {
+                "destination": user_request,
+                "budget": 2000,
+                "travelers": 1,
+                "trip_type": "leisure"
+            }
 
         prompt = f"""
-        Extract travel parameters from this request: "{user_request}"
+        {context}Current request: "{user_request}"
 
-        Return a JSON object with these fields:
+        Extract travel parameters. If this is a follow-up message, use context from previous conversation.
+
+        Return JSON:
         {{
             "destination": "city, country",
-            "departure_city": "city or airport code",
-            "start_date": "YYYY-MM-DD or null",
-            "end_date": "YYYY-MM-DD or null", 
-            "budget": number or null,
+            "departure_city": "departure location",
+            "budget": number,
             "travelers": number,
-            "interests": ["list", "of", "interests"],
-            "trip_type": "leisure/business/adventure/romantic/family"
+            "start_date": "YYYY-MM-DD or null",
+            "end_date": "YYYY-MM-DD or null",
+            "interests": ["list of interests"],
+            "trip_type": "leisure/business/adventure"
         }}
-
-        If information is missing, use null or reasonable defaults.
         """
 
         try:
             response = await asyncio.to_thread(
-                self.model.generate_content,
-                prompt,
-                generation_config=genai.types.GenerationConfig(
-                    temperature=0.1,
-                    candidate_count=1,
-                )
+                self.model.generate_content, prompt
             )
 
-            # Extract JSON from response
             text = response.text.strip()
             if text.startswith('```json'):
                 text = text[7:-3]
@@ -205,103 +218,11 @@ class GeminiTravelAgent:
             return json.loads(text)
 
         except Exception as e:
-            print(f"⚠️  Error parsing request, using smart defaults: {str(e)}")
-            # Smart fallback parsing
-            request_lower = user_request.lower()
-            
-            # Extract destination from common patterns
-            destination = None
-            
-            # Common city patterns
-            city_patterns = {
-                "rome": "Rome, Italy",
-                "tokyo": "Tokyo, Japan", 
-                "japan": "Tokyo, Japan",
-                "paris": "Paris, France",
-                "france": "Paris, France", 
-                "london": "London, UK",
-                "uk": "London, UK",
-                "new york": "New York, NY",
-                "nyc": "New York, NY",
-                "cape town": "Cape Town, South Africa",
-                "south africa": "Cape Town, South Africa",
-                "barcelona": "Barcelona, Spain",
-                "spain": "Barcelona, Spain",
-                "amsterdam": "Amsterdam, Netherlands",
-                "netherlands": "Amsterdam, Netherlands",
-                "berlin": "Berlin, Germany",
-                "germany": "Berlin, Germany",
-                "sydney": "Sydney, Australia",
-                "australia": "Sydney, Australia",
-                "dubai": "Dubai, UAE",
-                "bangkok": "Bangkok, Thailand",
-                "thailand": "Bangkok, Thailand",
-                "istanbul": "Istanbul, Turkey",
-                "turkey": "Istanbul, Turkey",
-                "moscow": "Moscow, Russia",
-                "russia": "Moscow, Russia",
-                "mumbai": "Mumbai, India",
-                "delhi": "Delhi, India",
-                "india": "Mumbai, India",
-                "beijing": "Beijing, China",
-                "shanghai": "Shanghai, China",
-                "china": "Beijing, China",
-                "los angeles": "Los Angeles, CA",
-                "la": "Los Angeles, CA",
-                "san francisco": "San Francisco, CA",
-                "chicago": "Chicago, IL",
-                "miami": "Miami, FL",
-                "las vegas": "Las Vegas, NV",
-                "vegas": "Las Vegas, NV"
-            }
-            
-            # Find matching city
-            for pattern, city in city_patterns.items():
-                if pattern in request_lower:
-                    destination = city
-                    break
-            
-            # If no city found, try to extract from "in [city]" or "to [city]" patterns
-            if not destination:
-                import re
-                # Look for patterns like "in [city]", "to [city]", "visit [city]"
-                patterns = [
-                    r'\bin\s+([A-Za-z\s]+?)(?:\s|$|[,.])',
-                    r'\bto\s+([A-Za-z\s]+?)(?:\s|$|[,.])',
-                    r'\bvisit\s+([A-Za-z\s]+?)(?:\s|$|[,.])',
-                    r'\bactivities.*?in\s+([A-Za-z\s]+?)(?:\s|$|[,.])',
-                    r'\bthings.*?do.*?in\s+([A-Za-z\s]+?)(?:\s|$|[,.])'
-                ]
-                
-                for pattern in patterns:
-                    match = re.search(pattern, request_lower)
-                    if match:
-                        extracted_city = match.group(1).strip().title()
-                        if len(extracted_city) > 2:  # Avoid single letters
-                            destination = extracted_city
-                            break
-            
-            # Final fallback
-            if not destination:
-                destination = "Rome, Italy"
-            
-            # Extract activity type from question
-            interests = ["sightseeing"]
-            if "activities" in request_lower or "things to do" in request_lower:
-                interests = ["sightseeing", "culture", "entertainment"]
-            elif "food" in request_lower or "restaurant" in request_lower:
-                interests = ["dining", "food"]
-            elif "museum" in request_lower or "art" in request_lower:
-                interests = ["culture", "museums"]
-            
+            print(f"⚠️ Gemini parsing failed: {str(e)}")
             return {
-                "destination": destination,
-                "departure_city": None,
-                "start_date": None,
-                "end_date": None,
+                "destination": user_request,
                 "budget": 2000,
                 "travelers": 1,
-                "interests": interests,
                 "trip_type": "leisure"
             }
 
@@ -315,17 +236,9 @@ class GeminiTravelAgent:
             "restaurants": []
         }
 
-        # Check if any servers are available
-        server_status = self.mcp_manager.get_server_status()
-        ready_servers = [name for name, status in server_status.items() if status == "ready"]
-        
-        if not ready_servers:
-            print("⚠️  No MCP servers available, using fallback data")
-            return self._get_fallback_travel_data(parsed_request)
-
         try:
             # Get flights
-            if parsed_request.get("departure_city") and parsed_request.get("destination"):
+            if self.mcp_manager and parsed_request.get("departure_city") and parsed_request.get("destination"):
                 flights = await self.mcp_manager.call_server(
                     "flight-server",
                     "search_flights",
@@ -341,148 +254,187 @@ class GeminiTravelAgent:
                 travel_data["flights"] = flights.get("flights", [])
 
             # Get hotels
-            hotels = await self.mcp_manager.call_server(
-                "hotel-server",
-                "search_hotels",
-                {
-                    "location": parsed_request["destination"],
-                    "check_in": parsed_request.get("start_date", "2024-12-01"),
-                    "check_out": parsed_request.get("end_date", "2024-12-05"),
-                    "guests": parsed_request.get("travelers", 1),
-                    "budget_range": parsed_request.get("budget", 200)
-                }
-            )
-            travel_data["hotels"] = hotels.get("hotels", [])
+            if self.mcp_manager:
+                hotels = await self.mcp_manager.call_server(
+                    "hotel-server",
+                    "search_hotels",
+                    {
+                        "destination": parsed_request["destination"],
+                        "checkin_date": parsed_request.get("start_date", "2024-12-01"),
+                        "checkout_date": parsed_request.get("end_date", "2024-12-05"),
+                        "adults": parsed_request.get("travelers", 1),
+                        "max_rate": parsed_request.get("budget", 200)
+                    }
+                )
+                travel_data["hotels"] = hotels.get("hotels", [])
 
             # Get activities
-            activities = await self.mcp_manager.call_server(
-                "activity-server",
-                "search_activities",
-                {
-                    "location": parsed_request["destination"],
-                    "category": "sightseeing",
-                    "budget_range": parsed_request.get("budget", 100)
-                }
-            )
-            travel_data["activities"] = activities.get("activities", [])
+            if self.mcp_manager:
+                activities = await self.mcp_manager.call_server(
+                    "activity-server",
+                    "find_activities",
+                    {
+                        "location": parsed_request["destination"],
+                        "interests": parsed_request.get("interests", ["sightseeing"]),
+                        "budget": parsed_request.get("budget", 100)
+                    }
+                )
+                travel_data["activities"] = activities.get("activities", [])
 
             # Get restaurants
-            restaurants = await self.mcp_manager.call_server(
-                "restaurant-server",
-                "search_restaurants",
-                {
-                    "location": parsed_request["destination"],
-                    "cuisine_type": "local",
-                    "price_range": "$$",
-                    "party_size": parsed_request.get("travelers", 1)
-                }
-            )
-            travel_data["restaurants"] = restaurants.get("restaurants", [])
+            if self.mcp_manager:
+                restaurants = await self.mcp_manager.call_server(
+                    "restaurant-server",
+                    "find_restaurants",
+                    {
+                        "location": parsed_request["destination"],
+                        "budget_per_meal": 50,
+                        "cuisine_preferences": parsed_request.get("interests", [])
+                    }
+                )
+                travel_data["restaurants"] = restaurants.get("restaurants", [])
 
         except Exception as e:
-            print(f"⚠️  Error gathering travel data: {str(e)}")
+            print(f"⚠️ Error gathering travel data: {str(e)}")
+
+        # If no MCP manager or servers failed, generate mock data
+        if not any(travel_data.values()):
+            travel_data = self._generate_mock_travel_data(parsed_request)
 
         return travel_data
 
-    def _get_fallback_travel_data(self, parsed_request: Dict[str, Any]) -> Dict[str, List[Any]]:
-        """Provide fallback travel data when MCP servers are unavailable"""
-        destination = parsed_request.get("destination", "Your Destination")
-        
+    def _generate_mock_travel_data(self, parsed_request: Dict[str, Any]) -> Dict[str, List[Any]]:
+        """Generate realistic mock travel data for testing"""
+        destination = parsed_request.get("destination", "Tokyo")
+        budget = parsed_request.get("budget", 2000)
+
         return {
             "flights": [
                 {
-                    "id": "FB001",
-                    "airline": "Budget Airways",
-                    "origin": parsed_request.get("departure_city", "Origin"),
-                    "destination": destination,
-                    "departure_time": "09:00",
-                    "arrival_time": "13:30",
-                    "price": 299,
-                    "duration": "4h 30m"
+                    "id": "mock-flight-1",
+                    "price": int(budget * 0.4),
+                    "airline": "Delta",
+                    "departure_time": "08:30",
+                    "arrival_time": "16:45",
+                    "duration": "8h 15m",
+                    "stops": 0,
+                    "convenience_score": 8,
+                    "quality_score": 7
+                },
+                {
+                    "id": "mock-flight-2",
+                    "price": int(budget * 0.3),
+                    "airline": "United",
+                    "departure_time": "14:20",
+                    "arrival_time": "23:50",
+                    "duration": "9h 30m",
+                    "stops": 1,
+                    "convenience_score": 6,
+                    "quality_score": 6
                 }
             ],
             "hotels": [
                 {
-                    "id": "FH001",
-                    "name": f"{destination} Central Hotel",
-                    "location": destination,
-                    "rating": 4.2,
-                    "price_per_night": 150,
-                    "amenities": ["WiFi", "Breakfast", "Gym"]
+                    "id": "mock-hotel-1",
+                    "name": f"Luxury {destination} Hotel",
+                    "price_per_night": int(budget * 0.15),
+                    "rating": 4.5,
+                    "convenience_score": 9,
+                    "quality_score": 9
+                },
+                {
+                    "id": "mock-hotel-2",
+                    "name": f"Budget {destination} Inn",
+                    "price_per_night": int(budget * 0.08),
+                    "rating": 3.8,
+                    "convenience_score": 6,
+                    "quality_score": 6
                 }
             ],
             "activities": [
                 {
-                    "id": "FA001",
+                    "id": "mock-activity-1",
                     "name": f"{destination} City Tour",
-                    "category": "Sightseeing",
-                    "location": destination,
-                    "duration": "3 hours",
-                    "price": 35,
-                    "rating": 4.5
+                    "price": 50,
+                    "rating": 4.3,
+                    "type": "sightseeing"
                 }
             ],
             "restaurants": [
                 {
-                    "id": "FR001",
-                    "name": f"Local Cuisine {destination}",
-                    "cuisine": "Local",
-                    "location": destination,
-                    "rating": 4.3,
-                    "price_range": "$$"
+                    "id": "mock-restaurant-1",
+                    "name": f"Best {destination} Restaurant",
+                    "price_level": 3,
+                    "rating": 4.6,
+                    "cuisine": "local"
                 }
             ]
         }
 
-    async def _cluster_results(self, travel_data: Dict[str, List[Any]], parsed_request: Dict[str, Any]) -> Dict[
-        str, Any]:
-        """Use clustering server to organize results"""
+    async def _create_clusters(self, travel_data: Dict[str, List[Any]]) -> Dict[str, Any]:
+        """Simple clustering logic without external server"""
 
-        try:
-            clustering_result = await self.mcp_manager.call_server(
-                "clustering-server",
-                "cluster_itinerary",
-                {
-                    "activities": travel_data.get("activities", []) + travel_data.get("restaurants", []),
-                    "preferences": parsed_request.get("interests", ["sightseeing"]),
-                    "duration_days": 3
-                }
-            )
-            return clustering_result
+        flights = travel_data.get("flights", [])
+        hotels = travel_data.get("hotels", [])
 
-        except Exception as e:
-            print(f"⚠️  Error clustering results: {str(e)}")
-            # Return simple fallback clusters
-            return {
-                "clusters": [
-                    {"name": "Budget", "items": []},
-                    {"name": "Mid-range", "items": []},
-                    {"name": "Luxury", "items": []}
-                ]
-            }
+        # Simple price-based clustering
+        def categorize_by_price(items, price_key):
+            if not items:
+                return {"budget": [], "mid_range": [], "luxury": []}
 
-    async def _generate_recommendations(self, clustered_results: Dict[str, Any], parsed_request: Dict[str, Any]) -> \
-    List[Dict[str, Any]]:
-        """Generate final trip recommendations using Gemini"""
+            prices = [item.get(price_key, 0) for item in items]
+            if not prices or all(p == 0 for p in prices):
+                return {"budget": items, "mid_range": [], "luxury": []}
+
+            low_threshold = min(prices) + (max(prices) - min(prices)) * 0.33
+            high_threshold = min(prices) + (max(prices) - min(prices)) * 0.66
+
+            budget = [item for item in items if item.get(price_key, 0) <= low_threshold]
+            luxury = [item for item in items if item.get(price_key, 0) >= high_threshold]
+            mid_range = [item for item in items if item not in budget and item not in luxury]
+
+            return {"budget": budget, "mid_range": mid_range, "luxury": luxury}
+
+        return {
+            "flight_clusters": categorize_by_price(flights, "price"),
+            "hotel_clusters": categorize_by_price(hotels, "price_per_night"),
+            "summary": f"Created clusters from {len(flights)} flights and {len(hotels)} hotels"
+        }
+
+    async def _generate_contextual_response(self, user_request: str, travel_data: Dict[str, List[Any]],
+                                            clusters: Dict[str, Any], parsed_request: Dict[str, Any],
+                                            conversation_id: str = None) -> List[Dict[str, Any]]:
+        """Generate response considering conversation context"""
+
+        # Build conversation context
+        context = ""
+        if conversation_id and conversation_id in self.conversation_history:
+            history = self.conversation_history[conversation_id]["messages"]
+            if len(history) > 1:  # More than just current message
+                context = "Previous conversation context:\n"
+                for msg in history[:-1]:  # All except current message
+                    context += f"{msg['role']}: {msg['content'][:150]}...\n"
+                context += "\n"
 
         prompt = f"""
-        Based on this travel data, create 3 recommended itineraries for a trip to {parsed_request['destination']}:
+        {context}Current user request: "{user_request}"
 
-        Clustered Results: {json.dumps(clustered_results, indent=2)}
-        User Request: {json.dumps(parsed_request, indent=2)}
+        Available travel data:
+        - Flights: {len(travel_data.get('flights', []))} options
+        - Hotels: {len(travel_data.get('hotels', []))} options  
+        - Activities: {len(travel_data.get('activities', []))} options
+        - Restaurants: {len(travel_data.get('restaurants', []))} options
 
-        Generate 3 itineraries:
-        1. Budget-friendly option
-        2. Balanced option  
-        3. Premium option
+        Destination: {parsed_request.get('destination', 'Unknown')}
+        Budget: ${parsed_request.get('budget', 'Unknown')}
 
-        For each, provide:
-        - Total estimated cost
-        - Key highlights
-        - Day-by-day schedule
-        - Why this option fits the user's needs
+        Based on the user's request and conversation context, provide a helpful response. 
+        If they're asking follow-up questions about specific options, focus on those.
+        If they want comparisons, use the available data.
+        If they're asking general questions, provide comprehensive recommendations.
 
-        Return as JSON array.
+        Return helpful recommendations as a JSON array of recommendation objects.
+        Each recommendation should have: name, description, highlights, estimated_cost.
         """
 
         try:
@@ -504,10 +456,12 @@ class GeminiTravelAgent:
             return json.loads(text)
 
         except Exception as e:
-            print(f"⚠️  Error generating recommendations: {str(e)}")
+            print(f"⚠️ Error generating recommendations: {str(e)}")
             return [
-                {"name": "Budget Option", "cost": 1000, "highlights": ["Basic accommodations", "Local experiences"]},
-                {"name": "Balanced Option", "cost": 2000, "highlights": ["Mid-range hotels", "Mix of activities"]},
-                {"name": "Premium Option", "cost": 4000,
-                 "highlights": ["Luxury accommodations", "Exclusive experiences"]}
+                {
+                    "name": "Quick Response",
+                    "description": f"Response to: {user_request}",
+                    "highlights": ["AI-generated response"],
+                    "estimated_cost": 0
+                }
             ]
