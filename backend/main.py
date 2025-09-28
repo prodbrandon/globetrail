@@ -20,6 +20,7 @@ class FlightSearchRequest(BaseModel):
     message: str
     user_id: Optional[str] = None
     locations: Optional[list] = None  # For multi-location searches from globe
+    trip_type: Optional[str] = None  # 'round_trip' or 'one_way'
 
 
 class FlightSearchResponse(BaseModel):
@@ -450,7 +451,7 @@ async def parse_enhanced_travel_request(user_input: str) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Failed to parse travel request: {str(e)}")
 
 
-async def parse_flight_request_with_locations(user_input: str, locations: list) -> Dict[str, Any]:
+async def parse_flight_request_with_locations(user_input: str, locations: list, trip_type: Optional[str] = None) -> Dict[str, Any]:
     """Parse flight request with globe-selected locations"""
     
     gemini_key = os.getenv('GEMINI_API_KEY')
@@ -494,10 +495,16 @@ async def parse_flight_request_with_locations(user_input: str, locations: list) 
         "hl": "en"
     }}
 
+    Trip type preference: {trip_type or 'not specified'}
+
     Rules:
     - departure_id/arrival_id: Convert cities to codes ({origin}->airport code, {destination}->airport code)
     - Use common airport codes: LA/Los Angeles->LAX, Tokyo->NRT, NYC/New York->JFK, Paris->CDG, London->LHR, Boston->BOS, Dubai->DXB, Sydney->SYD, Singapore->SIN, Hong Kong->HKG, Mumbai->BOM, São Paulo->GRU, Cairo->CAI, Moscow->SVO, Mexico City->MEX, Cape Town->CPT
-    - type: "1" for round-trip, "2" for one-way (default to round-trip unless specified)
+    - type: "1" for round-trip, "2" for one-way
+      * If trip_type is "round_trip": use "1"
+      * If trip_type is "one_way": use "2"  
+      * If not specified: analyze the message for keywords like "round trip", "return", "one way"
+      * Default to round-trip if unclear
     - return_date: null if one-way, calculate date if round-trip (default 7 days after outbound)
     - outbound_date: ALWAYS set to {default_outbound} (30 days from today)
     - adults: extract number or default 1
@@ -531,7 +538,7 @@ async def parse_flight_request_with_locations(user_input: str, locations: list) 
         raise HTTPException(status_code=500, detail=f"Failed to parse flight request with locations: {str(e)}")
 
 
-async def parse_flight_request(user_input: str) -> Dict[str, Any]:
+async def parse_flight_request(user_input: str, trip_type: Optional[str] = None) -> Dict[str, Any]:
     """Use Gemini to parse flight request into SERP API parameters (basic version)"""
 
     gemini_key = os.getenv('GEMINI_API_KEY')
@@ -552,6 +559,7 @@ async def parse_flight_request(user_input: str) -> Dict[str, Any]:
     Default outbound date (30 days from today): {default_outbound}
     
     Parse this flight request: "{user_input}"
+    Trip type preference: {trip_type or 'not specified'}
 
     Extract these exact parameters for SERP API:
     {{
@@ -569,6 +577,10 @@ async def parse_flight_request(user_input: str) -> Dict[str, Any]:
     Rules:
     - departure_id/arrival_id: Convert cities to codes (LA->LAX, Tokyo->NRT, NYC->JFK, Paris->CDG, London->LHR, Boston->BOS)
     - type: "1" for round-trip, "2" for one-way
+      * If trip_type is "round_trip": use "1"
+      * If trip_type is "one_way": use "2"  
+      * If not specified: analyze the message for keywords like "round trip", "return", "one way"
+      * Default to round-trip if unclear
     - return_date: null if one-way, calculate date if round-trip (default 7 days after outbound)
     - outbound_date: ALWAYS set to {default_outbound} (30 days from today)
     - adults: extract number or default 1
@@ -774,9 +786,11 @@ async def search_flights(request: FlightSearchRequest):
         # If locations are provided from globe, use them to enhance the parsing
         if request.locations and len(request.locations) >= 2:
             print(f"🌍 Globe locations provided: {[loc['name'] for loc in request.locations]}")
-            extracted_params = await parse_flight_request_with_locations(request.message, request.locations)
+            print(f"🎯 Trip type specified: {request.trip_type}")
+            extracted_params = await parse_flight_request_with_locations(request.message, request.locations, request.trip_type)
         else:
-            extracted_params = await parse_flight_request(request.message)
+            print(f"🎯 Trip type specified: {request.trip_type}")
+            extracted_params = await parse_flight_request(request.message, request.trip_type)
 
         # Step 2: Validate required parameters
         required_fields = ['departure_id', 'arrival_id', 'outbound_date']

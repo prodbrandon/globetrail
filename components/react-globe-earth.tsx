@@ -9,6 +9,7 @@ interface City {
     lat: number
     country: string
     color?: string
+    roundTripMode?: boolean
 }
 
 interface Connection {
@@ -142,9 +143,14 @@ export default function ReactGlobeEarth({ className = "", onFlightSearch }: Reac
 
     const handleFlightSearch = useCallback(() => {
         if (selectedCities.length >= 2 && onFlightSearch) {
-            onFlightSearch(selectedCities)
+            // Pass cities with round trip mode information
+            const citiesWithMode = selectedCities.map(city => ({
+                ...city,
+                roundTripMode
+            }))
+            onFlightSearch(citiesWithMode)
         }
-    }, [selectedCities, onFlightSearch])
+    }, [selectedCities, onFlightSearch, roundTripMode])
 
     const handleCityClick = useCallback((city: any) => {
         const clickedCity = CITIES.find(c => c.name === city.name)

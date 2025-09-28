@@ -128,6 +128,7 @@ interface City {
   lng: number
   lat: number
   country: string
+  roundTripMode?: boolean
 }
 
 interface ChatbotSectionRef {
@@ -166,16 +167,35 @@ const ChatbotSection = forwardRef<ChatbotSectionRef>((props, ref) => {
     outboundDate.setDate(today.getDate() + 30)
     const formattedDate = outboundDate.toISOString().split('T')[0] // YYYY-MM-DD format
 
+    // Check if round trip mode is enabled (from the first location's metadata)
+    const isRoundTrip = locations[0]?.roundTripMode || false
+
     // Create a natural language query from the selected locations
     const origin = locations[0]
     const destination = locations[locations.length - 1] // Use last selected as destination
 
-    let flightQuery = `Find flights from ${origin.name} to ${destination.name} departing ${formattedDate}`
+    let flightQuery = ''
 
-    // If more than 2 locations, create a multi-city trip query
-    if (locations.length > 2) {
-      const intermediateStops = locations.slice(1, -1).map(city => city.name).join(', ')
-      flightQuery = `Multi-city trip: ${origin.name} → ${intermediateStops} → ${destination.name} departing ${formattedDate}`
+    if (isRoundTrip) {
+      // Calculate return date (7 days after departure for round trip)
+      const returnDate = new Date(outboundDate)
+      returnDate.setDate(outboundDate.getDate() + 7)
+      const formattedReturnDate = returnDate.toISOString().split('T')[0]
+
+      if (locations.length > 2) {
+        const intermediateStops = locations.slice(1, -1).map(city => city.name).join(', ')
+        flightQuery = `Round trip multi-city flight: ${origin.name} → ${intermediateStops} → ${destination.name}, departing ${formattedDate} and returning ${formattedReturnDate}`
+      } else {
+        flightQuery = `Round trip flights from ${origin.name} to ${destination.name}, departing ${formattedDate} and returning ${formattedReturnDate}`
+      }
+    } else {
+      // One way flight
+      if (locations.length > 2) {
+        const intermediateStops = locations.slice(1, -1).map(city => city.name).join(', ')
+        flightQuery = `One way multi-city flight: ${origin.name} → ${intermediateStops} → ${destination.name} departing ${formattedDate}`
+      } else {
+        flightQuery = `One way flight from ${origin.name} to ${destination.name} departing ${formattedDate}`
+      }
     }
 
     // Add the query as a user message and trigger search
@@ -203,7 +223,8 @@ const ChatbotSection = forwardRef<ChatbotSectionRef>((props, ref) => {
           body: JSON.stringify({
             message: flightQuery,
             user_id: "hackathon_user",
-            locations: locations // Pass the selected locations as metadata
+            locations: locations, // Pass the selected locations as metadata
+            trip_type: isRoundTrip ? 'round_trip' : 'one_way'
           })
         })
 
@@ -270,6 +291,7 @@ const ChatbotSection = forwardRef<ChatbotSectionRef>((props, ref) => {
     needsHotels: boolean;
     needsPlaces: boolean;
     destination?: string;
+    tripType?: 'round_trip' | 'one_way';
   } => {
     // ENHANCED: Use fast keyword classification
     const comprehensive = nbClassifier.analyzeComprehensive(message);
@@ -392,18 +414,31 @@ const ChatbotSection = forwardRef<ChatbotSectionRef>((props, ref) => {
       }
     }
 
+    // ENHANCED: Detect trip type from message
+    let tripType: 'round_trip' | 'one_way' | undefined = undefined;
+
+    if (lowerMessage.includes('round trip') || lowerMessage.includes('roundtrip') ||
+      lowerMessage.includes('return') || lowerMessage.includes('round-trip')) {
+      tripType = 'round_trip';
+    } else if (lowerMessage.includes('one way') || lowerMessage.includes('oneway') ||
+      lowerMessage.includes('one-way')) {
+      tripType = 'one_way';
+    }
+
     // ENHANCED: Log classification insights
     console.log('🎯 Fast Intent Analysis:', {
       needs: { flights: needsFlights, hotels: needsHotels, places: needsPlaces },
       confidence: classification.confidence,
-      shouldRouteToLLM: comprehensive.shouldRouteToLLM
+      shouldRouteToLLM: comprehensive.shouldRouteToLLM,
+      tripType: tripType || 'not specified'
     });
 
     return {
       needsFlights,
       needsHotels,
       needsPlaces,
-      destination: destination || undefined
+      destination: destination || undefined,
+      tripType
     };
   }
 
@@ -490,7 +525,8 @@ const ChatbotSection = forwardRef<ChatbotSectionRef>((props, ref) => {
           },
           body: JSON.stringify({
             message: currentInput,
-            user_id: "hackathon_user"
+            user_id: "hackathon_user",
+            trip_type: searchIntent.tripType
           })
         });
 
