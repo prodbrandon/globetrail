@@ -72,7 +72,7 @@ export default function ReactGlobeEarth({ className = "" }: ReactGlobeEarthProps
         return {
             ...city,
             color,
-            size: (isSelected || isHovered || isConnected) ? 1.5 : 1
+            size: (isSelected || isHovered || isConnected) ? 0.8 : 0.5
         }
     })
 
