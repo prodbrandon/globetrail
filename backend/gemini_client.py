@@ -17,7 +17,7 @@ class GeminiTravelAgent:
             raise ValueError("GEMINI_API_KEY not found in environment")
 
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-1.5-pro')
+        self.model = genai.GenerativeModel('gemini-2.5-flash')
         print("✅ Gemini client initialized")
 
     async def plan_trip(self, user_request: str) -> Dict[str, Any]:
