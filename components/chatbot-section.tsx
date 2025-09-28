@@ -36,18 +36,65 @@ interface TravelData {
   }
 }
 
+// Updated FlightData interface to match flight-server.js output
 interface FlightData {
+  id?: string
+  category?: string
   airline?: string
   flight_number?: string
-  origin?: any
-  destination?: any
-  departure?: any
-  arrival?: any
+  aircraft?: string
+  
+  // Origin details
+  origin?: string
+  origin_name?: string
+  origin_time?: string
+  departure_time?: string
+  
+  // Destination details  
+  destination?: string
+  destination_name?: string
+  arrival_time?: string
+  
+  // Pricing and timing
+  price?: number
+  currency?: string
   duration?: string
-  price?: {
-    amount?: number
-    currency?: string
-  } | number
+  
+  // Route details
+  stops?: number
+  layovers?: Array<{
+    airport?: string
+    airport_name?: string
+    duration?: string
+  }>
+  
+  // Additional info
+  carbon_emissions?: {
+    this_flight?: string
+    typical_for_route?: string
+    difference_percent?: number
+  }
+  booking_options?: Array<{
+    agent?: string
+    price?: number
+    link?: string
+  }>
+  flight_segments?: Array<{
+    segment_number?: number
+    airline?: string
+    flight_number?: string
+    departure_airport?: {
+      id?: string
+      name?: string
+      time?: string
+    }
+    arrival_airport?: {
+      id?: string
+      name?: string
+      time?: string
+    }
+    duration?: string
+  }>
 }
 
 interface HotelData {
@@ -217,6 +264,7 @@ export default function ChatbotSection() {
       if (data.request.start_date || data.request.end_date) response += `\n`;
       if (data.request.travelers) response += `• Travelers: ${data.request.travelers}\n`;
       if (data.request.budget) response += `• Budget: ${data.request.budget}\n`;
+      if (data.request.trip_type) response += `• Trip Type: ${data.request.trip_type}\n`;
       response += `\n`;
     }
 
@@ -375,6 +423,141 @@ export default function ChatbotSection() {
   )
 }
 
+// Enhanced flight display component
+function FlightDisplay({ flights }: { flights: FlightData[] }) {
+  return (
+    <div className="bg-black/30 rounded p-3 border border-gray-600/30">
+      <div className="flex items-center gap-2 mb-2">
+        <Plane className="w-4 h-4 text-blue-400" />
+        <span className="text-xs font-semibold text-blue-400">FLIGHTS</span>
+      </div>
+      <div className="space-y-3">
+        {flights.slice(0, 3).map((flight, idx) => {
+          // Extract departure date from departure_time or origin_time
+          const departureDateTime = flight.departure_time || flight.origin_time || '';
+          const departureDate = departureDateTime ? new Date(departureDateTime).toLocaleDateString() : '';
+          const departureTime = departureDateTime ? new Date(departureDateTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+          
+          // Extract arrival date/time
+          const arrivalDateTime = flight.arrival_time || '';
+          const arrivalTime = arrivalDateTime ? new Date(arrivalDateTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+          
+          // Get airport codes and names
+          const originCode = flight.origin || 'Unknown';
+          const originName = flight.origin_name || 'Unknown Airport';
+          const destCode = flight.destination || 'Unknown';
+          const destName = flight.destination_name || 'Unknown Airport';
+          
+          // Format price
+          const price = flight.price || 0;
+          const currency = flight.currency || 'USD';
+          
+          // Category indicator
+          const categoryColor = flight.category === 'best' ? 'text-green-400' : 
+                               flight.category === 'cheapest' ? 'text-yellow-400' : 
+                               'text-blue-400';
+          
+          return (
+            <div key={flight.id || idx} className="text-xs border-l-2 border-gray-600 pl-3">
+              {/* Flight header with airline and category */}
+              <div className="flex justify-between items-center mb-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-gray-200 font-medium">
+                    {flight.airline || 'Unknown Airline'}
+                  </span>
+                  {flight.flight_number && (
+                    <span className="text-gray-400">
+                      {flight.flight_number}
+                    </span>
+                  )}
+                  {flight.category && (
+                    <span className={`${categoryColor} text-xs uppercase`}>
+                      {flight.category}
+                    </span>
+                  )}
+                </div>
+                <span className="text-green-400 font-medium">
+                  ${price} {currency}
+                </span>
+              </div>
+
+              {/* Route information */}
+              <div className="text-gray-300 mb-1">
+                <div className="flex items-center justify-between">
+                  <span>
+                    <strong>{originCode}</strong> ({originName.split(' ').slice(0, 2).join(' ')})
+                  </span>
+                  <span className="text-gray-500 mx-2">→</span>
+                  <span>
+                    <strong>{destCode}</strong> ({destName.split(' ').slice(0, 2).join(' ')})
+                  </span>
+                </div>
+              </div>
+
+              {/* Date and time information */}
+              {departureDate && (
+                <div className="text-gray-400 mb-1">
+                  <span className="text-xs">
+                    📅 {departureDate}
+                    {departureTime && ` • Depart: ${departureTime}`}
+                    {arrivalTime && ` • Arrive: ${arrivalTime}`}
+                  </span>
+                </div>
+              )}
+
+              {/* Flight details */}
+              <div className="flex items-center gap-3 text-gray-400 text-xs">
+                {flight.duration && (
+                  <span>⏱️ {flight.duration}</span>
+                )}
+                {flight.stops !== undefined && (
+                  <span>
+                    {flight.stops === 0 ? '✈️ Direct' : `🔄 ${flight.stops} stop${flight.stops > 1 ? 's' : ''}`}
+                  </span>
+                )}
+                {flight.aircraft && (
+                  <span>🛩️ {flight.aircraft}</span>
+                )}
+              </div>
+
+              {/* Environmental and booking info */}
+              <div className="mt-2 flex items-center justify-between text-xs">
+                <div className="flex items-center gap-2">
+                  {flight.carbon_emissions?.this_flight && (
+                    <span className="text-green-300">
+                      🌱 {flight.carbon_emissions.this_flight}
+                    </span>
+                  )}
+                </div>
+                {flight.booking_options && flight.booking_options.length > 0 && (
+                  <span className="text-blue-300">
+                    📝 {flight.booking_options.length} booking option{flight.booking_options.length > 1 ? 's' : ''}
+                  </span>
+                )}
+              </div>
+
+              {/* Layover information for multi-stop flights */}
+              {flight.layovers && flight.layovers.length > 0 && (
+                <div className="mt-2 text-xs text-yellow-300">
+                  🔄 Layovers: {flight.layovers.map(layover => 
+                    `${layover.airport} (${layover.duration || 'N/A'})`
+                  ).join(', ')}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        
+        {flights.length > 3 && (
+          <div className="text-xs text-gray-400 text-center pt-2 border-t border-gray-600/30">
+            +{flights.length - 3} more flights available
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // Component to display structured travel data
 function TravelDataDisplay({ data }: { data: TravelData }) {
   const { raw_data } = data;
@@ -383,38 +566,9 @@ function TravelDataDisplay({ data }: { data: TravelData }) {
 
   return (
     <div className="space-y-3">
-      {/* Flights */}
+      {/* Enhanced Flights Display */}
       {raw_data.flights && raw_data.flights.length > 0 && (
-        <div className="bg-black/30 rounded p-3 border border-gray-600/30">
-          <div className="flex items-center gap-2 mb-2">
-            <Plane className="w-4 h-4 text-blue-400" />
-            <span className="text-xs font-semibold text-blue-400">FLIGHTS</span>
-          </div>
-          <div className="space-y-2">
-            {raw_data.flights.slice(0, 3).map((flight, idx) => (
-              <div key={idx} className="text-xs text-gray-300">
-                <div className="flex justify-between items-center">
-                  <span>{flight.airline || 'Unknown'} {flight.flight_number || ''}</span>
-                  <span className="text-green-400">
-                    ${typeof flight.price === 'object' && flight.price?.amount 
-                      ? flight.price.amount 
-                      : typeof flight.price === 'number' 
-                        ? flight.price 
-                        : 'N/A'}
-                  </span>
-                </div>
-                <div className="text-gray-400">
-                  {flight.origin?.city || 'Unknown'} → {flight.destination?.city || 'Unknown'} • {flight.duration || 'N/A'}
-                </div>
-              </div>
-            ))}
-            {raw_data.flights.length > 3 && (
-              <div className="text-xs text-gray-400">
-                +{raw_data.flights.length - 3} more flights
-              </div>
-            )}
-          </div>
-        </div>
+        <FlightDisplay flights={raw_data.flights} />
       )}
 
       {/* Hotels */}

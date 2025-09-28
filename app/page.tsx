@@ -1,12 +1,25 @@
 "use client"
 
 import { useState } from "react"
+import dynamic from "next/dynamic"
 import RotatingEarth from "@/components/rotating-earth"
-import ReactGlobeEarth from "@/components/react-globe-earth"
 import ChatbotSection from "@/components/chatbot-section"
 
+// Dynamically import the globe component with SSR disabled
+const ReactGlobeEarth = dynamic(() => import("@/components/react-globe-earth"), {
+  ssr: false,
+  loading: () => (
+    <div className="w-full h-full flex items-center justify-center">
+      <div className="flex flex-col items-center gap-4">
+        <div className="w-8 h-8 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+        <p className="text-white/70 text-sm font-mono">Loading Globe...</p>
+      </div>
+    </div>
+  )
+})
+
 export default function Home() {
-  const [useReactGlobe, setUseReactGlobe] = useState(true)
+  const [useReactGlobe] = useState(true)
 
   return (
     <main className="h-screen bg-black flex overflow-hidden">
@@ -35,7 +48,7 @@ export default function Home() {
           ></div>
         </div>
         
-        {/* Globe Toggle */}
+        {/* Globe Toggle
         <div className="absolute top-4 left-4 z-20">
           <button
             onClick={() => setUseReactGlobe(!useReactGlobe)}
@@ -43,7 +56,7 @@ export default function Home() {
           >
             {useReactGlobe ? "Switch to D3 Globe" : "Switch to React Globe"}
           </button>
-        </div>
+        </div> */}
 
         {/* Globe Components */}
         {useReactGlobe ? (

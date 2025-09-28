@@ -11,32 +11,50 @@ const servers = [
     { name: 'fallback-server', file: 'fallback-server.js', port: 3007 }
 ];
 
-console.log('🚀 Starting all MCP servers...');
+console.log('🚀 Starting ALL MCP servers (including search & fallback)...');
 
 const processes = [];
 
 for (const server of servers) {
     console.log(`🔄 Starting ${server.name} on port ${server.port}...`);
     
-    const serverProcess = spawn('node', ['-r', 'dotenv/config', server.file, server.port.toString()], {
+    const process = spawn('node', ['-r', 'dotenv/config', server.file, server.port.toString()], {
         stdio: ['pipe', 'pipe', 'pipe'],
         cwd: process.cwd()
     });
     
-    serverProcess.stdout.on('data', (data) => {
+    process.stdout.on('data', (data) => {
         console.log(`📝 ${server.name}: ${data.toString().trim()}`);
     });
     
-    serverProcess.stderr.on('data', (data) => {
+    process.stderr.on('data', (data) => {
         console.error(`❌ ${server.name}: ${data.toString().trim()}`);
     });
     
-    serverProcess.on('close', (code) => {
+    process.on('close', (code) => {
         console.log(`⚠️  ${server.name} exited with code ${code}`);
     });
     
-    processes.push({ name: server.name, process: serverProcess });
+    processes.push({ name: server.name, process });
 }
+
+// Health check after startup
+setTimeout(async () => {
+    console.log('\n🔍 Checking server health...');
+    
+    for (const server of servers) {
+        try {
+            const response = await fetch(`http://localhost:${server.port}/health`);
+            if (response.ok) {
+                console.log(`✅ ${server.name} is healthy`);
+            } else {
+                console.log(`⚠️  ${server.name} responded with status ${response.status}`);
+            }
+        } catch (error) {
+            console.log(`❌ ${server.name} is not responding: ${error.message}`);
+        }
+    }
+}, 3000);
 
 // Graceful shutdown
 process.on('SIGINT', () => {
@@ -48,4 +66,5 @@ process.on('SIGINT', () => {
     process.exit(0);
 });
 
-console.log('✅ All servers started. Press Ctrl+C to stop.');
+console.log('✅ All 7 servers started. Press Ctrl+C to stop.');
+console.log('📊 Server status will be checked in 3 seconds...');

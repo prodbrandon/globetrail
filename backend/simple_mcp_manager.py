@@ -46,31 +46,36 @@ class SimpleMCPManager:
             return False
 
     async def call_server(self, server_name: str, tool_name: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
-        """Call MCP server tool or return fallback data"""
+        """Call MCP server tool - no fallback data, real APIs only"""
         
         server = self.servers.get(server_name)
-        if server and server["status"] == "ready":
-            try:
-                payload = {"tool": tool_name, "parameters": parameters}
-                
-                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
-                    async with session.post(
-                        f"{server['url']}/call-tool",
-                        json=payload,
-                        headers={"Content-Type": "application/json"}
-                    ) as response:
-                        
-                        if response.status == 200:
-                            result = await response.json()
-                            print(f"📡 {server_name}.{tool_name} -> Real data")
-                            return result
-                        else:
-                            print(f"⚠️  {server_name}.{tool_name} failed, using fallback")
-            except Exception as e:
-                print(f"⚠️  {server_name}.{tool_name} error: {str(e)}, using fallback")
+        if not server:
+            raise Exception(f"Server {server_name} not configured")
+            
+        if server["status"] != "ready":
+            raise Exception(f"Server {server_name} is not ready (status: {server['status']})")
         
-        # Return fallback data
-        return self._get_fallback_data(tool_name, parameters)
+        try:
+            payload = {"tool": tool_name, "parameters": parameters}
+            
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+                async with session.post(
+                    f"{server['url']}/call-tool",
+                    json=payload,
+                    headers={"Content-Type": "application/json"}
+                ) as response:
+                    
+                    if response.status == 200:
+                        result = await response.json()
+                        print(f"📡 {server_name}.{tool_name} -> Real data")
+                        return result
+                    else:
+                        error_text = await response.text()
+                        raise Exception(f"API call failed: {response.status} - {error_text}")
+                        
+        except Exception as e:
+            print(f"❌ {server_name}.{tool_name} error: {str(e)}")
+            raise e
 
     def _get_fallback_data(self, tool_name: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """Provide fallback data for any tool"""

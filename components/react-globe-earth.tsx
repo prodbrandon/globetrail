@@ -55,6 +55,7 @@ export default function ReactGlobeEarth({ className = "" }: ReactGlobeEarthProps
     const [autoRotate, setAutoRotate] = useState(true)
     const [isLoading, setIsLoading] = useState(true)
     const [dimensions, setDimensions] = useState({ width: 800, height: 600 })
+    const [roundTripMode, setRoundTripMode] = useState(false)
 
     // Prepare cities data with colors based on selection state
     const citiesData = CITIES.map(city => {
@@ -98,23 +99,40 @@ export default function ReactGlobeEarth({ className = "" }: ReactGlobeEarthProps
                 (conn.from.name === to.name && conn.to.name === from.name)
             )
 
-            if (connectionExists || prev.length >= MAX_CONNECTIONS) {
+            if (connectionExists) {
                 return prev
             }
 
-            const connectionId = generateConnectionId(from, to)
-            const color = CONNECTION_COLORS[prev.length % CONNECTION_COLORS.length]
-
-            const newConnection: Connection = {
-                id: connectionId,
-                from,
-                to,
-                color
+            // Calculate how many connections we'll add (1 or 2)
+            const connectionsToAdd = roundTripMode ? 2 : 1
+            if (prev.length + connectionsToAdd > MAX_CONNECTIONS) {
+                return prev
             }
 
-            return [...prev, newConnection]
+            const connections = []
+            const baseColor = CONNECTION_COLORS[Math.floor(prev.length / (roundTripMode ? 2 : 1)) % CONNECTION_COLORS.length]
+
+            // Add outbound connection
+            connections.push({
+                id: generateConnectionId(from, to),
+                from,
+                to,
+                color: baseColor
+            })
+
+            // Add return connection if round-trip mode is enabled
+            if (roundTripMode) {
+                connections.push({
+                    id: generateConnectionId(to, from),
+                    from: to,
+                    to: from,
+                    color: baseColor
+                })
+            }
+
+            return [...prev, ...connections]
         })
-    }, [])
+    }, [roundTripMode])
 
     const resetConnections = useCallback(() => {
         setSelectedCities([])
@@ -262,7 +280,7 @@ export default function ReactGlobeEarth({ className = "" }: ReactGlobeEarthProps
 
             {/* Instructions */}
             <div className="absolute bottom-4 left-4 text-xs text-white/70 px-2 py-1 rounded-md bg-black/50 backdrop-blur z-10">
-                <div>Click cities to create connections ({connections.length}/{MAX_CONNECTIONS})</div>
+                <div>Click cities to create {roundTripMode ? 'round-trip' : 'one-way'} connections ({connections.length}/{MAX_CONNECTIONS})</div>
                 <div className="mt-1">Drag to rotate • Scroll to zoom</div>
             </div>
 
@@ -274,6 +292,16 @@ export default function ReactGlobeEarth({ className = "" }: ReactGlobeEarthProps
                         }`}
                 >
                     {autoRotate ? "Stop Rotation" : "Auto Rotate"}
+                </button>
+
+                <button
+                    onClick={() => setRoundTripMode(!roundTripMode)}
+                    className={`px-3 py-1 text-xs rounded-md backdrop-blur transition-colors ${roundTripMode
+                        ? "bg-green-600/80 text-white"
+                        : "bg-gray-900/80 text-white/70 hover:bg-gray-800/80"
+                        }`}
+                >
+                    {roundTripMode ? "Round Trip ✈️" : "One Way →"}
                 </button>
 
                 <button
@@ -303,7 +331,7 @@ export default function ReactGlobeEarth({ className = "" }: ReactGlobeEarthProps
                                     className="inline-block w-2 h-2 rounded-full mr-2"
                                     style={{ backgroundColor: conn.color }}
                                 ></span>
-                                {index + 1}. {conn.from.name} → {conn.to.name}
+                                {conn.from.name} → {conn.to.name}
                             </div>
                         ))}
                     </div>
