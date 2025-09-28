@@ -156,40 +156,166 @@ export default function ChatbotSection() {
     setIsTyping(true)
 
     try {
-      // Call FastAPI backend
-      const response = await fetch('http://localhost:8000/api/plan-trip', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          message: currentInput,
-          user_id: "hackathon_user"
-        })
-      });
+      // Determine what type of search to perform based on user input
+      const searchIntent = analyzeSearchIntent(currentInput);
+      console.log('🔍 Search intent:', searchIntent);
 
-      if (!response.ok) {
-        throw new Error(`API Error: ${response.status} ${response.statusText}`);
+      let flightsResult = null;
+      let hotelsResult = null;
+      let placesResult = null;
+
+      // Execute searches based on intent
+      if (searchIntent.needsFlights) {
+        console.log('🛫 Searching flights...')
+        const flightsResponse = await fetch('http://localhost:8000/api/flights/search', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            message: currentInput,
+            user_id: "hackathon_user"
+          })
+        });
+
+        if (!flightsResponse.ok) {
+          throw new Error(`Flights API Error: ${flightsResponse.status} ${flightsResponse.statusText}`);
+        }
+
+        flightsResult = await flightsResponse.json();
+        console.log('✅ Flights result:', flightsResult.success ? 'Success' : 'Failed');
       }
 
-      const result = await response.json();
+      if (searchIntent.needsHotels) {
+        console.log('🏨 Searching hotels...')
+        try {
+          const hotelsResponse = await fetch('http://localhost:8000/api/hotels/search', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              message: currentInput,
+              user_id: "hackathon_user"
+            })
+          });
 
-      if (result.success && result.data) {
-        const formattedContent = formatTravelResponse(result.data);
+          if (hotelsResponse.ok) {
+            hotelsResult = await hotelsResponse.json();
+            console.log('✅ Hotels result:', hotelsResult.success ? 'Success' : 'Failed');
+          }
+        } catch (error) {
+          console.warn('⚠️ Hotels search failed:', error);
+        }
+      }
+
+      if (searchIntent.needsPlaces) {
+        console.log('📍 Searching places...')
+        try {
+          // Extract destination from user input or flight results
+          let destination = searchIntent.destination;
+          if (!destination && flightsResult?.extracted_params?.destination_city) {
+            destination = flightsResult.extracted_params.destination_city;
+          }
+
+          if (destination) {
+            const placesResponse = await fetch('http://localhost:8000/api/places/search', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                destination_city: destination,
+                user_id: "hackathon_user"
+              })
+            });
+
+            if (placesResponse.ok) {
+              placesResult = await placesResponse.json();
+              console.log('✅ Places result:', placesResult.success ? 'Success' : 'Failed');
+            }
+          } else {
+            console.warn('⚠️ No destination found for places search');
+          }
+        } catch (error) {
+          console.warn('⚠️ Places search failed:', error);
+        }
+      }
+
+      // Combine results and format for frontend
+      if (flightsResult?.success || hotelsResult?.success || placesResult?.success) {
+        const combinedData: TravelData = {
+          raw_data: {
+            flights: [],
+            hotels: [],
+            activities: [],
+            restaurants: []
+          }
+        };
+
+        // Extract flights data
+        if (flightsResult?.success && flightsResult.data?.flights) {
+          combinedData.raw_data!.flights = flightsResult.data.flights.map((flight: any, index: number) => ({
+            id: flight.id || `flight_${index}`,
+            airline: flight.airline || 'Unknown Airline',
+            flight_number: flight.flight_number || '',
+            origin: flight.departure_code || '',
+            origin_name: flight.departure_name || '',
+            destination: flight.arrival_code || '',
+            destination_name: flight.arrival_name || '',
+            departure_time: flight.departure_time || '',
+            arrival_time: flight.arrival_time || '',
+            price: flight.price || 0,
+            currency: flight.currency || 'USD',
+            duration: flight.duration || '',
+            stops: flight.stops || 0,
+            category: index < 3 ? 'best' : 'other',
+            booking_options: flight.booking_options || []
+          }));
+        }
+
+        // Extract hotels data
+        if (hotelsResult?.success && hotelsResult.data) {
+          combinedData.raw_data!.hotels = hotelsResult.data.map((hotel: any) => ({
+            name: hotel.name || 'Unknown Hotel',
+            rating: hotel.rating || 0,
+            price_per_night: hotel.rate_per_night?.lowest || hotel.price_per_night || 0,
+            location: typeof hotel.location === 'string' ? hotel.location : hotel.location?.address || 'Unknown location'
+          }));
+        }
+
+        // Extract places/activities data
+        if (placesResult?.success && placesResult.data) {
+          combinedData.raw_data!.activities = placesResult.data.map((place: any) => ({
+            name: place.name || 'Unknown Activity',
+            type: place.types?.[0] || 'attraction',
+            price: 0, // Places API doesn't return prices
+            duration: 'Variable'
+          }));
+        }
+
+        const formattedContent = formatTravelResponse(combinedData);
 
         const botMessage: Message = {
           id: (Date.now() + 1).toString(),
           content: formattedContent,
           sender: "bot",
           timestamp: new Date(),
-          data: result.data
+          data: combinedData
         }
         setMessages((prev) => [...prev, botMessage])
       } else {
-        throw new Error(result.error || 'Unknown error occurred');
+        // Handle case where no results were found
+        let errorMessages = [];
+        if (searchIntent.needsFlights && !flightsResult?.success) errorMessages.push('flights');
+        if (searchIntent.needsHotels && !hotelsResult?.success) errorMessages.push('hotels');
+        if (searchIntent.needsPlaces && !placesResult?.success) errorMessages.push('places');
+
+        const primaryError = flightsResult?.error || hotelsResult?.error || placesResult?.error || 'Please try refining your search.';
+        throw new Error(`Unable to find ${errorMessages.join(', ')}. ${primaryError}`);
       }
     } catch (error) {
-      console.error('Error calling API:', error);
+      console.error('Error calling APIs:', error);
 
       let errorMessage = "I'm having trouble connecting to my travel services right now. ";
 
@@ -197,7 +323,9 @@ export default function ChatbotSection() {
         if (error.message.includes('Failed to fetch')) {
           errorMessage += "Please make sure the backend server is running on localhost:8000.\n\nTo start the backend:\n1. cd backend/\n2. python main.py";
         } else if (error.message.includes('API Error: 500')) {
-          errorMessage += "The backend server is running but the MCP servers might not be initialized. Check the backend logs.";
+          errorMessage += "The backend server is running but there might be an issue with the travel APIs. Check the backend logs.";
+        } else if (error.message.includes('API Error: 404')) {
+          errorMessage += "The API endpoint was not found. Please check that all endpoints are properly configured.";
         } else {
           errorMessage += `Error: ${error.message}`;
         }
@@ -215,6 +343,117 @@ export default function ChatbotSection() {
     } finally {
       setIsTyping(false)
     }
+  }
+
+  // Analyze user input to determine which APIs to call
+  const analyzeSearchIntent = (message: string): {
+    needsFlights: boolean;
+    needsHotels: boolean;
+    needsPlaces: boolean;
+    destination?: string;
+  } => {
+    const lowerMessage = message.toLowerCase();
+    
+    // Keywords for different search types
+    const flightKeywords = ['flight', 'flights', 'fly', 'plane', 'airport', 'departure', 'arrival', 'round trip', 'one way'];
+    const hotelKeywords = ['hotel', 'hotels', 'accommodation', 'stay', 'lodge', 'resort', 'booking', 'room'];
+    const placeKeywords = ['places', 'attractions', 'activities', 'things to do', 'sightseeing', 'visit', 'see', 'explore', 'tourist'];
+    
+    // Check for explicit keywords
+    const hasFlightKeywords = flightKeywords.some(keyword => lowerMessage.includes(keyword));
+    const hasHotelKeywords = hotelKeywords.some(keyword => lowerMessage.includes(keyword));
+    const hasPlaceKeywords = placeKeywords.some(keyword => lowerMessage.includes(keyword));
+    
+    // Extract destination using more flexible patterns
+    let destination = null;
+    
+    // Common patterns for destination extraction
+    const patterns = [
+      // "places in [destination]", "things to do in [destination]"
+      /(?:places|activities|things to do|attractions|visit|explore|see)\s+(?:in|at|around)\s+([a-zA-Z\s]+?)(?:\?|$|,)/,
+      // "hotels in [destination]", "stay in [destination]"
+      /(?:hotel|hotels|stay|accommodation|lodge|resort)\s+(?:in|at|around)\s+([a-zA-Z\s]+?)(?:\?|$|,)/,
+      // "flights to [destination]", "fly to [destination]"
+      /(?:flight|flights|fly|plane|airport)\s+(?:to|into)\s+([a-zA-Z\s]+?)(?:\?|$|,)/,
+      // "go to [destination]", "travel to [destination]"
+      /(?:go|travel|trip)\s+(?:to|into)\s+([a-zA-Z\s]+?)(?:\?|$|,)/,
+      // "[destination] places", "[destination] attractions"
+      /^([a-zA-Z\s]+?)\s+(?:places|attractions|activities|things to do|hotels|flights)(?:\?|$)/,
+      // Simple pattern: just a city name with question words
+      /(?:what|where|show|find|get)\s+(?:me\s+)?(?:some\s+)?(?:good\s+)?(?:places|attractions|activities|things|hotels|flights)?\s*(?:in|at|around|for|to)?\s+([a-zA-Z\s]{2,30})(?:\?|$)/
+    ];
+    
+    for (const pattern of patterns) {
+      const match = lowerMessage.match(pattern);
+      if (match && match[1]) {
+        // Clean up the extracted destination
+        destination = match[1]
+          .trim()
+          .replace(/\b(the|a|an)\b/g, '') // Remove articles
+          .replace(/\s+/g, ' ') // Normalize spaces
+          .split(' ')
+          .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+          .join(' ');
+        
+        // Skip if destination is too generic or likely not a place
+        const genericWords = ['there', 'here', 'somewhere', 'anywhere', 'places', 'city', 'town'];
+        if (!genericWords.includes(destination.toLowerCase()) && destination.length > 1) {
+          break;
+        } else {
+          destination = null;
+        }
+      }
+    }
+    
+    // If no destination found but place keywords exist, try to extract any capitalized words (proper nouns)
+    if (!destination && hasPlaceKeywords) {
+      const words = message.split(/\s+/);
+      const capitalizedWords = words.filter(word => 
+        /^[A-Z][a-z]+/.test(word) && 
+        !['I', 'What', 'Where', 'When', 'How', 'Can', 'Show', 'Find', 'Get'].includes(word)
+      );
+      
+      if (capitalizedWords.length > 0) {
+        destination = capitalizedWords.join(' ');
+      }
+    }
+    
+    // Determine search intent
+    let needsFlights = false;
+    let needsHotels = false;
+    let needsPlaces = false;
+    
+    // If only place keywords and destination, just search places
+    if (hasPlaceKeywords && destination && !hasFlightKeywords && !hasHotelKeywords) {
+      needsPlaces = true;
+    }
+    // If only hotel keywords, just search hotels
+    else if (hasHotelKeywords && !hasFlightKeywords && !hasPlaceKeywords) {
+      needsHotels = true;
+    }
+    // If only flight keywords, just search flights
+    else if (hasFlightKeywords && !hasHotelKeywords && !hasPlaceKeywords) {
+      needsFlights = true;
+    }
+    // If multiple keywords or general travel query, search all relevant
+    else if (hasFlightKeywords || hasHotelKeywords || hasPlaceKeywords) {
+      needsFlights = hasFlightKeywords;
+      needsHotels = hasHotelKeywords;
+      needsPlaces = hasPlaceKeywords;
+    }
+    // Default for travel planning queries - search all
+    else {
+      needsFlights = true;
+      needsHotels = true;
+      needsPlaces = true;
+    }
+    
+    return {
+      needsFlights,
+      needsHotels,
+      needsPlaces,
+      destination: destination || undefined
+    };
   }
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
