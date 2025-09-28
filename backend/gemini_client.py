@@ -189,7 +189,8 @@ class GeminiTravelAgent:
         prompt = f"""
         {context}Current request: "{user_request}"
 
-        Extract travel parameters. If this is a follow-up message, use context from previous conversation.
+        Extract travel parameters. If this is a follow-up message, use context from previous conversation. Make sure the
+        departure and arrival cities are in airport code. Example: Los Angeles is LAX.
 
         Return JSON:
         {{
