@@ -42,7 +42,7 @@ We used a modern, scalable stack:
 ├── public/         # Static assets
 ├── styles/         # CSS/SCSS styling
 ├── types/          # TypeScript types
-├── API_test.py     # Backend API and AI logic (Python)
+├── API_test.py     # Backend API and AI logic test file (Python)
 ├── components.json
 ├── next.config.mjs
 ├── package.json
