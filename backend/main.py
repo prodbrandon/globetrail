@@ -408,9 +408,9 @@ async def parse_enhanced_travel_request(user_input: str) -> Dict[str, Any]:
 
     Extract these exact parameters:
     {{
-        "departure_id": "3-letter airport code",
-        "arrival_id": "3-letter airport code",
-        "destination_city": "full destination city name for places search",
+        "departure_id": "3-letter airport code for departure city",
+        "arrival_id": "3-letter airport code for arrival/destination city",
+        "destination_city": "full destination city name for places search - THIS MUST BE THE ARRIVAL CITY, NOT DEPARTURE",
         "outbound_date": "YYYY-MM-DD",
         "return_date": "YYYY-MM-DD or null",
         "type": "1 or 2",
@@ -420,9 +420,12 @@ async def parse_enhanced_travel_request(user_input: str) -> Dict[str, Any]:
         "hl": "en"
     }}
 
-    Rules:
+    CRITICAL RULES:
     - departure_id/arrival_id: Convert cities to codes (LA->LAX, Tokyo->NRT, NYC->JFK, Paris->CDG, London->LHR, Boston->BOS)
-    - destination_city: Full city name for Google Places (Tokyo, Paris, London, etc)
+    - destination_city: MUST be the ARRIVAL/DESTINATION city name (where the person is GOING TO), NOT where they are departing from
+    - For "from NYC to Paris" -> departure_id: "JFK", arrival_id: "CDG", destination_city: "Paris"
+    - For "from Los Angeles to Tokyo" -> departure_id: "LAX", arrival_id: "NRT", destination_city: "Tokyo"
+    - For "Boston to London trip" -> departure_id: "BOS", arrival_id: "LHR", destination_city: "London"
     - type: "1" for round-trip, "2" for one-way
     - return_date: null if one-way, calculate date if round-trip (default 7 days after outbound)
     - outbound_date: ALWAYS set to {default_outbound} (30 days from today)
@@ -430,6 +433,10 @@ async def parse_enhanced_travel_request(user_input: str) -> Dict[str, Any]:
     - children: extract number or default 0
     - currency: always "USD"
     - hl: always "en"
+
+    EXAMPLE:
+    Input: "Round trip from New York to Paris for 2 people"
+    Output: {{"departure_id": "JFK", "arrival_id": "CDG", "destination_city": "Paris", ...}}
 
     Return ONLY the JSON object, no other text.
     """
@@ -563,8 +570,9 @@ async def parse_flight_request(user_input: str, trip_type: Optional[str] = None)
 
     Extract these exact parameters for SERP API:
     {{
-        "departure_id": "3-letter airport code",
-        "arrival_id": "3-letter airport code", 
+        "departure_id": "3-letter airport code for departure city",
+        "arrival_id": "3-letter airport code for arrival/destination city", 
+        "destination_city": "full destination city name - THIS MUST BE THE ARRIVAL CITY, NOT DEPARTURE",
         "outbound_date": "YYYY-MM-DD",
         "return_date": "YYYY-MM-DD or null",
         "type": "1 or 2",
@@ -574,8 +582,11 @@ async def parse_flight_request(user_input: str, trip_type: Optional[str] = None)
         "hl": "en"
     }}
 
-    Rules:
+    CRITICAL RULES:
     - departure_id/arrival_id: Convert cities to codes (LA->LAX, Tokyo->NRT, NYC->JFK, Paris->CDG, London->LHR, Boston->BOS)
+    - destination_city: MUST be the ARRIVAL/DESTINATION city name (where the person is GOING TO), NOT where they are departing from
+    - For "from NYC to Paris" -> departure_id: "JFK", arrival_id: "CDG", destination_city: "Paris"
+    - For "from Los Angeles to Tokyo" -> departure_id: "LAX", arrival_id: "NRT", destination_city: "Tokyo"
     - type: "1" for round-trip, "2" for one-way
       * If trip_type is "round_trip": use "1"
       * If trip_type is "one_way": use "2"  
@@ -587,6 +598,10 @@ async def parse_flight_request(user_input: str, trip_type: Optional[str] = None)
     - children: extract number or default 0
     - currency: always "USD" 
     - hl: always "en"
+
+    EXAMPLE:
+    Input: "Flight from Boston to London"
+    Output: {{"departure_id": "BOS", "arrival_id": "LHR", "destination_city": "London", ...}}
 
     Return ONLY the JSON object, no other text.
     """
