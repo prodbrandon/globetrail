@@ -1,3 +1,5 @@
+// components/chatbot-section.tsx - Enhanced with Naive Bayes Classifier
+
 "use client"
 
 import type React from "react"
@@ -6,7 +8,13 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Send, Bot, User, Globe, Loader2, Plane, Hotel, MapPin, Utensils, ChevronDown } from "lucide-react"
+// REPLACE: Use Naive Bayes instead of simple keyword classifier
+import { NaiveBayesChatClassifier } from "@/lib/naive-bayes-classifier"
 
+// INITIALIZE: Naive Bayes classifier (automatically trains on initialization)
+const nbClassifier = new NaiveBayesChatClassifier();
+
+// Keep all your existing interfaces unchanged
 interface Message {
   id: string
   content: string
@@ -36,39 +44,29 @@ interface TravelData {
   }
 }
 
-// Updated FlightData interface to match flight-server.js output
+// Keep all your existing interfaces exactly as they are
 interface FlightData {
   id?: string
   category?: string
   airline?: string
   flight_number?: string
   aircraft?: string
-  
-  // Origin details
   origin?: string
   origin_name?: string
   origin_time?: string
   departure_time?: string
-  
-  // Destination details  
   destination?: string
   destination_name?: string
   arrival_time?: string
-  
-  // Pricing and timing
   price?: number
   currency?: string
   duration?: string
-  
-  // Route details
   stops?: number
   layovers?: Array<{
     airport?: string
     airport_name?: string
     duration?: string
   }>
-  
-  // Additional info
   carbon_emissions?: {
     this_flight?: string
     typical_for_route?: string
@@ -126,6 +124,7 @@ interface RestaurantData {
 }
 
 export default function ChatbotSection() {
+  // Keep all your existing state exactly as is
   const [messages, setMessages] = useState<Message[]>([
     {
       id: "1",
@@ -140,9 +139,166 @@ export default function ChatbotSection() {
   const scrollAreaRef = useRef<HTMLDivElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
+  // ENHANCED: Naive Bayes powered search intent analysis
+  const analyzeSearchIntent = (message: string): {
+    needsFlights: boolean;
+    needsHotels: boolean;
+    needsPlaces: boolean;
+    destination?: string;
+  } => {
+    // ENHANCED: Use Naive Bayes for classification
+    const comprehensive = nbClassifier.analyzeComprehensive(message);
+    const { classification, multiIntent, urgency, budget } = comprehensive;
+    
+    console.log('🧠 Naive Bayes Classification:', {
+      category: classification.category,
+      confidence: classification.confidence,
+      probabilities: classification.probabilities,
+      keywords: classification.keywords.slice(0, 5)
+    });
+
+    if (multiIntent.length > 1) {
+      console.log('🔄 Multi-intent detected:', multiIntent);
+    }
+
+    if (urgency.isUrgent) {
+      console.log('🚨 Urgent request detected:', urgency.urgencyLevel, urgency.keywords);
+    }
+
+    if (budget.hasBudget) {
+      console.log('💰 Budget detected:', budget.amount, budget.type);
+    }
+
+    // Keep your existing destination extraction logic (it works well)
+    const lowerMessage = message.toLowerCase();
+    let destination = null;
+    
+    const patterns = [
+      /(?:places|activities|things to do|attractions|visit|explore|see)\s+(?:in|at|around)\s+([a-zA-Z\s]+?)(?:\?|$|,)/,
+      /(?:hotel|hotels|stay|accommodation|lodge|resort)\s+(?:in|at|around)\s+([a-zA-Z\s]+?)(?:\?|$|,)/,
+      /(?:flight|flights|fly|plane|airport)\s+(?:to|into)\s+([a-zA-Z\s]+?)(?:\?|$|,)/,
+      /(?:go|travel|trip)\s+(?:to|into)\s+([a-zA-Z\s]+?)(?:\?|$|,)/,
+      /^([a-zA-Z\s]+?)\s+(?:places|attractions|activities|things to do|hotels|flights)(?:\?|$)/,
+      /(?:what|where|show|find|get)\s+(?:me\s+)?(?:some\s+)?(?:good\s+)?(?:places|attractions|activities|things|hotels|flights)?\s*(?:in|at|around|for|to)?\s+([a-zA-Z\s]{2,30})(?:\?|$)/
+    ];
+    
+    for (const pattern of patterns) {
+      const match = lowerMessage.match(pattern);
+      if (match && match[1]) {
+        destination = match[1]
+          .trim()
+          .replace(/\b(the|a|an)\b/g, '')
+          .replace(/\s+/g, ' ')
+          .split(' ')
+          .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+          .join(' ');
+        
+        const genericWords = ['there', 'here', 'somewhere', 'anywhere', 'places', 'city', 'town'];
+        if (!genericWords.includes(destination.toLowerCase()) && destination.length > 1) {
+          break;
+        } else {
+          destination = null;
+        }
+      }
+    }
+    
+    if (!destination) {
+      const words = message.split(/\s+/);
+      const capitalizedWords = words.filter(word => 
+        /^[A-Z][a-z]+/.test(word) && 
+        !['I', 'What', 'Where', 'When', 'How', 'Can', 'Show', 'Find', 'Get'].includes(word)
+      );
+      
+      if (capitalizedWords.length > 0) {
+        destination = capitalizedWords.join(' ');
+      }
+    }
+
+    // ENHANCED: Intent determination using Naive Bayes results
+    let needsFlights = false;
+    let needsHotels = false;
+    let needsPlaces = false;
+
+    // Multi-intent: check if multiple categories have significant probability
+    if (multiIntent.length > 1) {
+      needsFlights = multiIntent.includes('flights');
+      needsHotels = multiIntent.includes('hotels'); 
+      needsPlaces = multiIntent.includes('places');
+    } else {
+      // Single intent based on highest probability category
+      switch (classification.category) {
+        case 'flights':
+          needsFlights = true;
+          // If high confidence and mentions destination, also get places
+          if (classification.confidence > 0.7 && destination) {
+            needsPlaces = true;
+          }
+          break;
+        case 'hotels':
+          needsHotels = true;
+          // If mentions destination, also get places
+          if (destination) {
+            needsPlaces = true;
+          }
+          break;
+        case 'places':
+          needsPlaces = true;
+          break;
+        case 'other':
+          // Low confidence, fall back to your original keyword logic
+          const flightKeywords = ['flight', 'flights', 'fly', 'plane', 'airport', 'departure', 'arrival', 'round trip', 'one way'];
+          const hotelKeywords = ['hotel', 'hotels', 'accommodation', 'stay', 'lodge', 'resort', 'booking', 'room'];
+          const placeKeywords = ['places', 'attractions', 'activities', 'things to do', 'sightseeing', 'visit', 'see', 'explore', 'tourist'];
+          
+          const hasFlightKeywords = flightKeywords.some(keyword => lowerMessage.includes(keyword));
+          const hasHotelKeywords = hotelKeywords.some(keyword => lowerMessage.includes(keyword));
+          const hasPlaceKeywords = placeKeywords.some(keyword => lowerMessage.includes(keyword));
+          
+          if (hasFlightKeywords || hasHotelKeywords || hasPlaceKeywords) {
+            needsFlights = hasFlightKeywords;
+            needsHotels = hasHotelKeywords;
+            needsPlaces = hasPlaceKeywords;
+          } else {
+            // Default to all for unclear requests
+            needsFlights = true;
+            needsHotels = true;
+            needsPlaces = true;
+          }
+          break;
+      }
+    }
+
+    // ENHANCED: Log classification insights
+    console.log('🎯 Naive Bayes Intent Analysis:', {
+      needs: { flights: needsFlights, hotels: needsHotels, places: needsPlaces },
+      confidence: classification.confidence,
+      shouldRouteToLLM: comprehensive.shouldRouteToLLM
+    });
+
+    return {
+      needsFlights,
+      needsHotels,
+      needsPlaces,
+      destination: destination || undefined
+    };
+  }
+
+  // Keep your existing handleSendMessage function with enhanced logging
   const handleSendMessage = async () => {
     if (!inputValue.trim() || isTyping) return
 
+    // ENHANCED: Get comprehensive analysis
+    const comprehensive = nbClassifier.analyzeComprehensive(inputValue);
+    console.log('📊 Comprehensive Analysis:', {
+      category: comprehensive.classification.category,
+      confidence: comprehensive.classification.confidence,
+      multiIntent: comprehensive.multiIntent,
+      urgency: comprehensive.urgency.isUrgent ? comprehensive.urgency.urgencyLevel : 'none',
+      budget: comprehensive.budget.hasBudget ? `$${comprehensive.budget.amount} ${comprehensive.budget.type}` : 'none',
+      shouldRouteToLLM: comprehensive.shouldRouteToLLM
+    });
+
+    // Keep all your existing message handling exactly as is
     const userMessage: Message = {
       id: Date.now().toString(),
       content: inputValue,
@@ -156,15 +312,15 @@ export default function ChatbotSection() {
     setIsTyping(true)
 
     try {
-      // Determine what type of search to perform based on user input
+      // Use enhanced search intent analysis
       const searchIntent = analyzeSearchIntent(currentInput);
-      console.log('🔍 Search intent:', searchIntent);
+      console.log('🔍 Final Search Intent:', searchIntent);
 
+      // Keep all your existing API calls exactly as they are
       let flightsResult = null;
       let hotelsResult = null;
       let placesResult = null;
 
-      // Execute searches based on intent
       if (searchIntent.needsFlights) {
         console.log('🛫 Searching flights...')
         const flightsResponse = await fetch('http://localhost:8000/api/flights/search', {
@@ -212,7 +368,6 @@ export default function ChatbotSection() {
       if (searchIntent.needsPlaces) {
         console.log('📍 Searching places...')
         try {
-          // Extract destination from user input or flight results
           let destination = searchIntent.destination;
           if (!destination && flightsResult?.extracted_params?.destination_city) {
             destination = flightsResult.extracted_params.destination_city;
@@ -242,7 +397,7 @@ export default function ChatbotSection() {
         }
       }
 
-      // Combine results and format for frontend
+      // Keep all your existing result processing exactly as is
       if (flightsResult?.success || hotelsResult?.success || placesResult?.success) {
         const combinedData: TravelData = {
           raw_data: {
@@ -253,7 +408,6 @@ export default function ChatbotSection() {
           }
         };
 
-        // Extract flights data
         if (flightsResult?.success && flightsResult.data?.flights) {
           combinedData.raw_data!.flights = flightsResult.data.flights.map((flight: any, index: number) => ({
             id: flight.id || `flight_${index}`,
@@ -274,7 +428,6 @@ export default function ChatbotSection() {
           }));
         }
 
-        // Extract hotels data
         if (hotelsResult?.success && hotelsResult.data) {
           combinedData.raw_data!.hotels = hotelsResult.data.map((hotel: any) => ({
             name: hotel.name || 'Unknown Hotel',
@@ -284,12 +437,11 @@ export default function ChatbotSection() {
           }));
         }
 
-        // Extract places/activities data
         if (placesResult?.success && placesResult.data) {
           combinedData.raw_data!.activities = placesResult.data.map((place: any) => ({
             name: place.name || 'Unknown Activity',
             type: place.types?.[0] || 'attraction',
-            price: 0, // Places API doesn't return prices
+            price: 0,
             duration: 'Variable'
           }));
         }
@@ -305,7 +457,6 @@ export default function ChatbotSection() {
         }
         setMessages((prev) => [...prev, botMessage])
       } else {
-        // Handle case where no results were found
         let errorMessages = [];
         if (searchIntent.needsFlights && !flightsResult?.success) errorMessages.push('flights');
         if (searchIntent.needsHotels && !hotelsResult?.success) errorMessages.push('hotels');
@@ -345,117 +496,7 @@ export default function ChatbotSection() {
     }
   }
 
-  // Analyze user input to determine which APIs to call
-  const analyzeSearchIntent = (message: string): {
-    needsFlights: boolean;
-    needsHotels: boolean;
-    needsPlaces: boolean;
-    destination?: string;
-  } => {
-    const lowerMessage = message.toLowerCase();
-    
-    // Keywords for different search types
-    const flightKeywords = ['flight', 'flights', 'fly', 'plane', 'airport', 'departure', 'arrival', 'round trip', 'one way'];
-    const hotelKeywords = ['hotel', 'hotels', 'accommodation', 'stay', 'lodge', 'resort', 'booking', 'room'];
-    const placeKeywords = ['places', 'attractions', 'activities', 'things to do', 'sightseeing', 'visit', 'see', 'explore', 'tourist'];
-    
-    // Check for explicit keywords
-    const hasFlightKeywords = flightKeywords.some(keyword => lowerMessage.includes(keyword));
-    const hasHotelKeywords = hotelKeywords.some(keyword => lowerMessage.includes(keyword));
-    const hasPlaceKeywords = placeKeywords.some(keyword => lowerMessage.includes(keyword));
-    
-    // Extract destination using more flexible patterns
-    let destination = null;
-    
-    // Common patterns for destination extraction
-    const patterns = [
-      // "places in [destination]", "things to do in [destination]"
-      /(?:places|activities|things to do|attractions|visit|explore|see)\s+(?:in|at|around)\s+([a-zA-Z\s]+?)(?:\?|$|,)/,
-      // "hotels in [destination]", "stay in [destination]"
-      /(?:hotel|hotels|stay|accommodation|lodge|resort)\s+(?:in|at|around)\s+([a-zA-Z\s]+?)(?:\?|$|,)/,
-      // "flights to [destination]", "fly to [destination]"
-      /(?:flight|flights|fly|plane|airport)\s+(?:to|into)\s+([a-zA-Z\s]+?)(?:\?|$|,)/,
-      // "go to [destination]", "travel to [destination]"
-      /(?:go|travel|trip)\s+(?:to|into)\s+([a-zA-Z\s]+?)(?:\?|$|,)/,
-      // "[destination] places", "[destination] attractions"
-      /^([a-zA-Z\s]+?)\s+(?:places|attractions|activities|things to do|hotels|flights)(?:\?|$)/,
-      // Simple pattern: just a city name with question words
-      /(?:what|where|show|find|get)\s+(?:me\s+)?(?:some\s+)?(?:good\s+)?(?:places|attractions|activities|things|hotels|flights)?\s*(?:in|at|around|for|to)?\s+([a-zA-Z\s]{2,30})(?:\?|$)/
-    ];
-    
-    for (const pattern of patterns) {
-      const match = lowerMessage.match(pattern);
-      if (match && match[1]) {
-        // Clean up the extracted destination
-        destination = match[1]
-          .trim()
-          .replace(/\b(the|a|an)\b/g, '') // Remove articles
-          .replace(/\s+/g, ' ') // Normalize spaces
-          .split(' ')
-          .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-          .join(' ');
-        
-        // Skip if destination is too generic or likely not a place
-        const genericWords = ['there', 'here', 'somewhere', 'anywhere', 'places', 'city', 'town'];
-        if (!genericWords.includes(destination.toLowerCase()) && destination.length > 1) {
-          break;
-        } else {
-          destination = null;
-        }
-      }
-    }
-    
-    // If no destination found but place keywords exist, try to extract any capitalized words (proper nouns)
-    if (!destination && hasPlaceKeywords) {
-      const words = message.split(/\s+/);
-      const capitalizedWords = words.filter(word => 
-        /^[A-Z][a-z]+/.test(word) && 
-        !['I', 'What', 'Where', 'When', 'How', 'Can', 'Show', 'Find', 'Get'].includes(word)
-      );
-      
-      if (capitalizedWords.length > 0) {
-        destination = capitalizedWords.join(' ');
-      }
-    }
-    
-    // Determine search intent
-    let needsFlights = false;
-    let needsHotels = false;
-    let needsPlaces = false;
-    
-    // If only place keywords and destination, just search places
-    if (hasPlaceKeywords && destination && !hasFlightKeywords && !hasHotelKeywords) {
-      needsPlaces = true;
-    }
-    // If only hotel keywords, just search hotels
-    else if (hasHotelKeywords && !hasFlightKeywords && !hasPlaceKeywords) {
-      needsHotels = true;
-    }
-    // If only flight keywords, just search flights
-    else if (hasFlightKeywords && !hasHotelKeywords && !hasPlaceKeywords) {
-      needsFlights = true;
-    }
-    // If multiple keywords or general travel query, search all relevant
-    else if (hasFlightKeywords || hasHotelKeywords || hasPlaceKeywords) {
-      needsFlights = hasFlightKeywords;
-      needsHotels = hasHotelKeywords;
-      needsPlaces = hasPlaceKeywords;
-    }
-    // Default for travel planning queries - search all
-    else {
-      needsFlights = true;
-      needsHotels = true;
-      needsPlaces = true;
-    }
-    
-    return {
-      needsFlights,
-      needsHotels,
-      needsPlaces,
-      destination: destination || undefined
-    };
-  }
-
+  // Keep all your existing helper functions exactly as they are
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
@@ -463,37 +504,31 @@ export default function ChatbotSection() {
     }
   }
 
-  // Scroll to bottom function
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }
 
-  // Check if user is near bottom of scroll area
   const handleScroll = (event: React.UIEvent<HTMLDivElement>) => {
     const { scrollTop, scrollHeight, clientHeight } = event.currentTarget
     const isNearBottom = scrollHeight - scrollTop - clientHeight < 100
     setShowScrollButton(!isNearBottom)
   }
 
-  // Auto-scroll to bottom when new messages are added
   useEffect(() => {
     if (!showScrollButton) {
       scrollToBottom()
     }
   }, [messages, isTyping, showScrollButton])
 
-  // Format travel response data into readable text
   const formatTravelResponse = (data: TravelData): string => {
     if (!data) return "I couldn't find any travel information for your request.";
 
     let response = "";
 
-    // Add recommendations if available
     if (data.recommendations) {
       response += `🎯 **Travel Recommendations:**\n${data.recommendations}\n\n`;
     }
 
-    // Add travel request summary
     if (data.request) {
       response += `📋 **Trip Summary:**\n`;
       if (data.request.destination) response += `• Destination: ${data.request.destination}\n`;
@@ -507,7 +542,6 @@ export default function ChatbotSection() {
       response += `\n`;
     }
 
-    // Add data summary with proper null checks
     if (data.raw_data) {
       if (data.raw_data.flights && data.raw_data.flights.length > 0) {
         response += `✈️ **Found ${data.raw_data.flights.length} flights**\n`;
@@ -530,8 +564,10 @@ export default function ChatbotSection() {
     return response.trim();
   }
 
+  // Keep all your existing JSX exactly as is - no changes needed to the UI
   return (
     <div className="h-full bg-gradient-to-b from-black via-gray-900 to-black relative">
+      {/* Keep all your existing JSX structure unchanged */}
       <div
         className="absolute inset-0 opacity-5"
         style={{
@@ -543,7 +579,6 @@ export default function ChatbotSection() {
         }}
       ></div>
 
-      {/* Fixed Header */}
       <div className="relative z-10 p-6 border-b border-gray-700/50 bg-black/20 backdrop-blur-sm">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-full bg-transparent border-2 border-white/30 flex items-center justify-center">
@@ -556,7 +591,6 @@ export default function ChatbotSection() {
         </div>
       </div>
 
-      {/* Messages Area - positioned absolutely to fill space between header and input */}
       <div className="absolute top-[120px] bottom-[100px] left-0 right-0 z-10">
         <ScrollArea className="h-full p-6" onScrollCapture={handleScroll} ref={scrollAreaRef}>
           <div className="space-y-4 pb-4">
@@ -578,7 +612,6 @@ export default function ChatbotSection() {
                 >
                   <div className="whitespace-pre-wrap">{message.content}</div>
 
-                  {/* Show structured travel data if available */}
                   {message.data && message.sender === "bot" && (
                     <div className="mt-4 pt-4 border-t border-gray-600/30">
                       <TravelDataDisplay data={message.data} />
@@ -619,12 +652,10 @@ export default function ChatbotSection() {
                 </div>
               </div>
             )}
-            {/* Invisible element to scroll to */}
             <div ref={messagesEndRef} />
           </div>
         </ScrollArea>
 
-        {/* Scroll to Bottom Button */}
         {showScrollButton && (
           <div className="absolute bottom-4 right-4 z-20">
             <Button
@@ -638,7 +669,6 @@ export default function ChatbotSection() {
         )}
       </div>
 
-      {/* Fixed Input Area at Bottom */}
       <div className="absolute bottom-0 left-0 right-0 z-10 p-6 border-t border-gray-700/50 bg-black/20 backdrop-blur-sm">
         <div className="flex gap-2">
           <Input
@@ -662,7 +692,7 @@ export default function ChatbotSection() {
   )
 }
 
-// Enhanced flight display component
+// Keep all your existing display components exactly as they are
 function FlightDisplay({ flights }: { flights: FlightData[] }) {
   return (
     <div className="bg-black/30 rounded p-3 border border-gray-600/30">
@@ -672,33 +702,27 @@ function FlightDisplay({ flights }: { flights: FlightData[] }) {
       </div>
       <div className="space-y-3">
         {flights.slice(0, 3).map((flight, idx) => {
-          // Extract departure date from departure_time or origin_time
           const departureDateTime = flight.departure_time || flight.origin_time || '';
           const departureDate = departureDateTime ? new Date(departureDateTime).toLocaleDateString() : '';
           const departureTime = departureDateTime ? new Date(departureDateTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
           
-          // Extract arrival date/time
           const arrivalDateTime = flight.arrival_time || '';
           const arrivalTime = arrivalDateTime ? new Date(arrivalDateTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
           
-          // Get airport codes and names
           const originCode = flight.origin || 'Unknown';
           const originName = flight.origin_name || 'Unknown Airport';
           const destCode = flight.destination || 'Unknown';
           const destName = flight.destination_name || 'Unknown Airport';
           
-          // Format price
           const price = flight.price || 0;
           const currency = flight.currency || 'USD';
           
-          // Category indicator
           const categoryColor = flight.category === 'best' ? 'text-green-400' : 
                                flight.category === 'cheapest' ? 'text-yellow-400' : 
                                'text-blue-400';
           
           return (
             <div key={flight.id || idx} className="text-xs border-l-2 border-gray-600 pl-3">
-              {/* Flight header with airline and category */}
               <div className="flex justify-between items-center mb-1">
                 <div className="flex items-center gap-2">
                   <span className="text-gray-200 font-medium">
@@ -720,7 +744,6 @@ function FlightDisplay({ flights }: { flights: FlightData[] }) {
                 </span>
               </div>
 
-              {/* Route information */}
               <div className="text-gray-300 mb-1">
                 <div className="flex items-center justify-between">
                   <span>
@@ -733,7 +756,6 @@ function FlightDisplay({ flights }: { flights: FlightData[] }) {
                 </div>
               </div>
 
-              {/* Date and time information */}
               {departureDate && (
                 <div className="text-gray-400 mb-1">
                   <span className="text-xs">
@@ -744,7 +766,6 @@ function FlightDisplay({ flights }: { flights: FlightData[] }) {
                 </div>
               )}
 
-              {/* Flight details */}
               <div className="flex items-center gap-3 text-gray-400 text-xs">
                 {flight.duration && (
                   <span>⏱️ {flight.duration}</span>
@@ -759,7 +780,6 @@ function FlightDisplay({ flights }: { flights: FlightData[] }) {
                 )}
               </div>
 
-              {/* Environmental and booking info */}
               <div className="mt-2 flex items-center justify-between text-xs">
                 <div className="flex items-center gap-2">
                   {flight.carbon_emissions?.this_flight && (
@@ -775,7 +795,6 @@ function FlightDisplay({ flights }: { flights: FlightData[] }) {
                 )}
               </div>
 
-              {/* Layover information for multi-stop flights */}
               {flight.layovers && flight.layovers.length > 0 && (
                 <div className="mt-2 text-xs text-yellow-300">
                   🔄 Layovers: {flight.layovers.map(layover => 
@@ -797,7 +816,7 @@ function FlightDisplay({ flights }: { flights: FlightData[] }) {
   );
 }
 
-// Component to display structured travel data
+// Keep your existing TravelDataDisplay component exactly as is
 function TravelDataDisplay({ data }: { data: TravelData }) {
   const { raw_data } = data;
 
@@ -805,12 +824,10 @@ function TravelDataDisplay({ data }: { data: TravelData }) {
 
   return (
     <div className="space-y-3">
-      {/* Enhanced Flights Display */}
       {raw_data.flights && raw_data.flights.length > 0 && (
         <FlightDisplay flights={raw_data.flights} />
       )}
 
-      {/* Hotels */}
       {raw_data.hotels && raw_data.hotels.length > 0 && (
         <div className="bg-black/30 rounded p-3 border border-gray-600/30">
           <div className="flex items-center gap-2 mb-2">
@@ -842,7 +859,6 @@ function TravelDataDisplay({ data }: { data: TravelData }) {
         </div>
       )}
 
-      {/* Activities */}
       {raw_data.activities && raw_data.activities.length > 0 && (
         <div className="bg-black/30 rounded p-3 border border-gray-600/30">
           <div className="flex items-center gap-2 mb-2">
@@ -876,7 +892,6 @@ function TravelDataDisplay({ data }: { data: TravelData }) {
         </div>
       )}
 
-      {/* Restaurants */}
       {raw_data.restaurants && raw_data.restaurants.length > 0 && (
         <div className="bg-black/30 rounded p-3 border border-gray-600/30">
           <div className="flex items-center gap-2 mb-2">
