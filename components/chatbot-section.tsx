@@ -47,7 +47,7 @@ interface FlightData {
   price?: {
     amount?: number
     currency?: string
-  }
+  } | number
 }
 
 interface HotelData {
@@ -57,6 +57,7 @@ interface HotelData {
     amount?: number
     currency?: string
   }
+  price_per_night?: number
   location?: string
 }
 
@@ -66,7 +67,7 @@ interface ActivityData {
   price?: {
     amount?: number
     currency?: string
-  }
+  } | number
   duration?: string
 }
 
@@ -394,7 +395,13 @@ function TravelDataDisplay({ data }: { data: TravelData }) {
               <div key={idx} className="text-xs text-gray-300">
                 <div className="flex justify-between items-center">
                   <span>{flight.airline || 'Unknown'} {flight.flight_number || ''}</span>
-                  <span className="text-green-400">${flight.price?.amount || 'N/A'}</span>
+                  <span className="text-green-400">
+                    ${typeof flight.price === 'object' && flight.price?.amount 
+                      ? flight.price.amount 
+                      : typeof flight.price === 'number' 
+                        ? flight.price 
+                        : 'N/A'}
+                  </span>
                 </div>
                 <div className="text-gray-400">
                   {flight.origin?.city || 'Unknown'} → {flight.destination?.city || 'Unknown'} • {flight.duration || 'N/A'}
@@ -422,7 +429,11 @@ function TravelDataDisplay({ data }: { data: TravelData }) {
               <div key={idx} className="text-xs text-gray-300">
                 <div className="flex justify-between items-center">
                   <span>{hotel.name || 'Unknown Hotel'}</span>
-                  <span className="text-green-400">${hotel.price?.amount || 'N/A'}/night</span>
+                  <span className="text-green-400">
+                    ${typeof hotel.price === 'object' && hotel.price?.amount 
+                      ? hotel.price.amount 
+                      : hotel.price_per_night || 'N/A'}/night
+                  </span>
                 </div>
                 <div className="text-gray-400">
                   {'⭐'.repeat(hotel.rating || 0)} • {hotel.location || 'Unknown location'}
@@ -450,7 +461,13 @@ function TravelDataDisplay({ data }: { data: TravelData }) {
               <div key={idx} className="text-xs text-gray-300">
                 <div className="flex justify-between items-center">
                   <span>{activity.name || 'Unknown Activity'}</span>
-                  <span className="text-green-400">${activity.price?.amount || 'N/A'}</span>
+                  <span className="text-green-400">
+                    ${typeof activity.price === 'object' && activity.price?.amount 
+                      ? activity.price.amount 
+                      : typeof activity.price === 'number' 
+                        ? activity.price 
+                        : 'N/A'}
+                  </span>
                 </div>
                 <div className="text-gray-400">
                   {activity.type || 'Activity'} • {activity.duration || 'N/A'}

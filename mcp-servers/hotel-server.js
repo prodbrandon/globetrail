@@ -1,5 +1,7 @@
 import express from 'express';
 import cors from 'cors';
+import axios from 'axios';
+import { API_CONFIG, validateApiKeys } from './config.js';
 
 const app = express();
 const port = process.argv[2] || 3002;
@@ -43,7 +45,63 @@ app.post('/call-tool', async (req, res) => {
 async function searchHotels(params) {
     const { location, check_in, check_out, guests = 2, budget_range } = params;
     
-    // Mock hotel search results
+    // Try Google Places API for hotels
+    if (API_CONFIG.GOOGLE_PLACES.API_KEY) {
+        try {
+            // First, get coordinates for the location
+            const geocodeResponse = await axios.get(`${API_CONFIG.GOOGLE_MAPS.BASE_URL}/geocode/json`, {
+                params: {
+                    address: location,
+                    key: API_CONFIG.GOOGLE_PLACES.API_KEY
+                }
+            });
+            
+            if (geocodeResponse.data.results.length > 0) {
+                const coords = geocodeResponse.data.results[0].geometry.location;
+                
+                // Search for hotels using Places API
+                const placesResponse = await axios.get(`${API_CONFIG.GOOGLE_PLACES.BASE_URL}/nearbysearch/json`, {
+                    params: {
+                        location: `${coords.lat},${coords.lng}`,
+                        radius: 10000, // 10km radius
+                        type: 'lodging',
+                        key: API_CONFIG.GOOGLE_PLACES.API_KEY
+                    }
+                });
+                
+                if (placesResponse.data.results) {
+                    const hotels = placesResponse.data.results.slice(0, 10).map((place, index) => ({
+                        id: `HTL${String(index + 1).padStart(3, '0')}`,
+                        name: place.name,
+                        location: place.vicinity,
+                        rating: place.rating || 0,
+                        price_per_night: (place.price_level || 2) * 50, // Estimate based on price level
+                        amenities: place.types.filter(type => 
+                            !['establishment', 'point_of_interest', 'lodging'].includes(type)
+                        ),
+                        distance_to_center: 'Within 10km',
+                        image_url: place.photos ? 
+                            `${API_CONFIG.GOOGLE_PLACES.BASE_URL}/photo?maxwidth=400&photoreference=${place.photos[0].photo_reference}&key=${API_CONFIG.GOOGLE_PLACES.API_KEY}` 
+                            : '/placeholder.jpg',
+                        google_place_id: place.place_id,
+                        review_count: place.user_ratings_total || 0,
+                        open_now: place.opening_hours?.open_now
+                    }));
+                    
+                    return {
+                        hotels,
+                        search_params: { location, check_in, check_out, guests, budget_range },
+                        source: 'google_places_api'
+                    };
+                }
+            }
+        } catch (error) {
+            console.error('Google Places API error:', error.message);
+        }
+    }
+    
+    // Fallback to mock hotel data
+    console.log('Google Places API not available or failed - using mock data');
     return {
         hotels: [
             {
@@ -65,19 +123,10 @@ async function searchHotels(params) {
                 amenities: ['WiFi', 'Restaurant', 'Business Center'],
                 distance_to_center: '0.2 km',
                 image_url: '/placeholder.jpg'
-            },
-            {
-                id: 'HTL003',
-                name: 'Luxury Resort & Spa',
-                location,
-                rating: 4.8,
-                price_per_night: 350,
-                amenities: ['Pool', 'Spa', 'Beach Access', 'Multiple Restaurants', 'Golf Course'],
-                distance_to_center: '5 km',
-                image_url: '/placeholder.jpg'
             }
         ],
-        search_params: { location, check_in, check_out, guests, budget_range }
+        search_params: { location, check_in, check_out, guests, budget_range },
+        source: 'mock_data'
     };
 }
 

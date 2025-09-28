@@ -2,10 +2,24 @@
   "name": "travel-mcp-servers",
   "version": "1.0.0",
   "type": "module",
+  "scripts": {
+    "start": "node -r dotenv/config flight-server.js",
+    "start:all": "concurrently \"npm run start:flight\" \"npm run start:hotel\" \"npm run start:restaurant\" \"npm run start:activity\" \"npm run start:clustering\"",
+    "start:flight": "node -r dotenv/config flight-server.js 3001",
+    "start:hotel": "node -r dotenv/config hotel-server.js 3002", 
+    "start:restaurant": "node -r dotenv/config restaurant-server.js 3004",
+    "start:activity": "node -r dotenv/config activity-server.js 3003",
+    "start:clustering": "node -r dotenv/config clustering-server.js 3005",
+    "test": "node test-apis.js"
+  },
   "dependencies": {
     "express": "^4.19.2",
     "cors": "^2.8.5",
     "axios": "^1.6.8",
-    "@modelcontextprotocol/sdk": "^0.5.0"
+    "@modelcontextprotocol/sdk": "^0.5.0",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
   }
 }

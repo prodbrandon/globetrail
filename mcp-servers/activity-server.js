@@ -1,5 +1,7 @@
 import express from 'express';
 import cors from 'cors';
+import axios from 'axios';
+import { API_CONFIG } from './config.js';
 
 const app = express();
 const port = process.argv[2] || 3003;
@@ -43,62 +45,143 @@ app.post('/call-tool', async (req, res) => {
 async function searchActivities(params) {
     const { location, date, category, budget_range } = params;
     
-    // Mock activity search results
+    // Try Google Places API for tourist attractions and activities
+    if (API_CONFIG.GOOGLE_PLACES.API_KEY) {
+        try {
+            // First, get coordinates for the location
+            const geocodeResponse = await axios.get(`${API_CONFIG.GOOGLE_MAPS.BASE_URL}/geocode/json`, {
+                params: {
+                    address: location,
+                    key: API_CONFIG.GOOGLE_PLACES.API_KEY
+                }
+            });
+            
+            if (geocodeResponse.data.results.length > 0) {
+                const coords = geocodeResponse.data.results[0].geometry.location;
+                
+                // Map category to Google Places types
+                const typeMapping = {
+                    'sightseeing': 'tourist_attraction',
+                    'culture': 'museum',
+                    'outdoor': 'park',
+                    'entertainment': 'amusement_park',
+                    'shopping': 'shopping_mall'
+                };
+                
+                const placeType = typeMapping[category?.toLowerCase()] || 'tourist_attraction';
+                
+                // Search for activities using Places API
+                const placesResponse = await axios.get(`${API_CONFIG.GOOGLE_PLACES.BASE_URL}/nearbysearch/json`, {
+                    params: {
+                        location: `${coords.lat},${coords.lng}`,
+                        radius: 15000, // 15km radius
+                        type: placeType,
+                        key: API_CONFIG.GOOGLE_PLACES.API_KEY
+                    }
+                });
+                
+                if (placesResponse.data.results) {
+                    const activities = placesResponse.data.results.slice(0, 10).map((place, index) => ({
+                        id: `ACT${String(index + 1).padStart(3, '0')}`,
+                        name: place.name,
+                        category: category || 'Sightseeing',
+                        location: place.vicinity,
+                        duration: '2-4 hours', // Estimated
+                        price: (place.price_level || 1) * 15, // Estimate based on price level
+                        rating: place.rating || 0,
+                        description: `Visit ${place.name} - a popular ${placeType.replace('_', ' ')} in ${location}`,
+                        includes: ['Entry access', 'Self-guided exploration'],
+                        image_url: place.photos ? 
+                            `${API_CONFIG.GOOGLE_PLACES.BASE_URL}/photo?maxwidth=400&photoreference=${place.photos[0].photo_reference}&key=${API_CONFIG.GOOGLE_PLACES.API_KEY}` 
+                            : '/placeholder.jpg',
+                        google_place_id: place.place_id,
+                        review_count: place.user_ratings_total || 0,
+                        open_now: place.opening_hours?.open_now
+                    }));
+                    
+                    return {
+                        activities,
+                        search_params: { location, date, category, budget_range },
+                        source: 'google_places_api'
+                    };
+                }
+            }
+        } catch (error) {
+            console.error('Google Places API error:', error.message);
+        }
+    }
+    
+    // Fallback to mock data if API fails
+    console.log('Google Places API not available or failed - using mock data');
     return {
         activities: [
             {
                 id: 'ACT001',
-                name: 'City Walking Tour',
+                name: `${location} City Walking Tour`,
                 category: 'Sightseeing',
                 location,
                 duration: '3 hours',
                 price: 25,
                 rating: 4.6,
-                description: 'Explore the historic downtown area with a knowledgeable local guide.',
+                description: `Explore the historic downtown area of ${location} with a knowledgeable local guide.`,
                 includes: ['Professional guide', 'Historical insights', 'Photo opportunities']
             },
             {
                 id: 'ACT002',
-                name: 'Food & Wine Tasting',
+                name: `${location} Food & Culture Experience`,
                 category: 'Culinary',
                 location,
                 duration: '2.5 hours',
                 price: 65,
                 rating: 4.8,
-                description: 'Sample local cuisine and wines at the best spots in the city.',
-                includes: ['Food tastings', 'Wine pairings', 'Local guide']
-            },
-            {
-                id: 'ACT003',
-                name: 'Adventure Hiking Trail',
-                category: 'Outdoor',
-                location,
-                duration: '5 hours',
-                price: 45,
-                rating: 4.4,
-                description: 'Challenging hike with breathtaking views and wildlife spotting.',
-                includes: ['Equipment rental', 'Safety briefing', 'Snacks']
-            },
-            {
-                id: 'ACT004',
-                name: 'Museum & Art Gallery Tour',
-                category: 'Culture',
-                location,
-                duration: '4 hours',
-                price: 35,
-                rating: 4.3,
-                description: 'Discover local art and history in the citys premier cultural institutions.',
-                includes: ['Museum entries', 'Audio guide', 'Expert commentary']
+                description: `Sample local cuisine and learn about the culture of ${location}.`,
+                includes: ['Food tastings', 'Cultural insights', 'Local guide']
             }
         ],
-        search_params: { location, date, category, budget_range }
+        search_params: { location, date, category, budget_range },
+        source: 'mock_data'
     };
 }
 
 async function getActivityDetails(params) {
     const { activity_id } = params;
     
-    // Mock activity details
+    // Try to get details from Google Places if it's a Google Place ID
+    if (API_CONFIG.GOOGLE_PLACES.API_KEY && activity_id.includes('google_')) {
+        try {
+            const placeId = activity_id.replace('google_', '');
+            const response = await axios.get(`${API_CONFIG.GOOGLE_PLACES.BASE_URL}/details/json`, {
+                params: {
+                    place_id: placeId,
+                    fields: 'name,formatted_address,formatted_phone_number,website,opening_hours,reviews,photos,rating,user_ratings_total',
+                    key: API_CONFIG.GOOGLE_PLACES.API_KEY
+                }
+            });
+            
+            if (response.data.result) {
+                const place = response.data.result;
+                return {
+                    activity: {
+                        id: activity_id,
+                        name: place.name,
+                        full_description: place.reviews?.[0]?.text || `Visit ${place.name}, a popular attraction with ${place.user_ratings_total || 0} reviews and a ${place.rating || 'N/A'} star rating.`,
+                        address: place.formatted_address,
+                        phone: place.formatted_phone_number,
+                        website: place.website,
+                        hours: place.opening_hours?.weekday_text || [],
+                        reviews: place.reviews?.slice(0, 3) || [],
+                        rating: place.rating,
+                        review_count: place.user_ratings_total
+                    },
+                    source: 'google_places_api'
+                };
+            }
+        } catch (error) {
+            console.error('Google Places API error:', error.message);
+        }
+    }
+    
+    // Fallback to mock data
     return {
         activity: {
             id: activity_id,
@@ -115,7 +198,8 @@ async function getActivityDetails(params) {
             meeting_point: 'Central Square Fountain',
             cancellation_policy: 'Free cancellation up to 24 hours before start time',
             group_size: 'Maximum 15 people'
-        }
+        },
+        source: 'mock_data'
     };
 }
 

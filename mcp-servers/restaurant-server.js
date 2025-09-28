@@ -1,5 +1,7 @@
 import express from 'express';
 import cors from 'cors';
+import axios from 'axios';
+import { API_CONFIG, validateApiKeys } from './config.js';
 
 const app = express();
 const port = process.argv[2] || 3004;
@@ -46,7 +48,75 @@ app.post('/call-tool', async (req, res) => {
 async function searchRestaurants(params) {
     const { location, cuisine_type, price_range, date, party_size } = params;
     
-    // Mock restaurant search results
+    // Try Google Places API first, fallback to mock data
+    if (API_CONFIG.GOOGLE_PLACES.API_KEY) {
+        try {
+            // First, get coordinates for the location
+            const geocodeResponse = await axios.get(`${API_CONFIG.GOOGLE_MAPS.BASE_URL}/geocode/json`, {
+                params: {
+                    address: location,
+                    key: API_CONFIG.GOOGLE_PLACES.API_KEY
+                }
+            });
+            
+            if (geocodeResponse.data.results.length > 0) {
+                const coords = geocodeResponse.data.results[0].geometry.location;
+                
+                // Search for restaurants using Places API
+                let query = 'restaurant';
+                if (cuisine_type) {
+                    query = `${cuisine_type} restaurant`;
+                }
+                
+                const placesResponse = await axios.get(`${API_CONFIG.GOOGLE_PLACES.BASE_URL}/nearbysearch/json`, {
+                    params: {
+                        location: `${coords.lat},${coords.lng}`,
+                        radius: 5000, // 5km radius
+                        type: 'restaurant',
+                        keyword: cuisine_type || '',
+                        key: API_CONFIG.GOOGLE_PLACES.API_KEY
+                    }
+                });
+                
+                if (placesResponse.data.results) {
+                    const restaurants = placesResponse.data.results.slice(0, 10).map((place, index) => ({
+                        id: `REST${String(index + 1).padStart(3, '0')}`,
+                        name: place.name,
+                        cuisine: place.types.filter(type => 
+                            !['establishment', 'point_of_interest', 'food', 'restaurant'].includes(type)
+                        ).join(', ') || 'Restaurant',
+                        location: place.vicinity,
+                        rating: place.rating || 0,
+                        price_range: '$'.repeat(place.price_level || 1),
+                        specialties: place.types.filter(type => 
+                            !['establishment', 'point_of_interest'].includes(type)
+                        ),
+                        atmosphere: 'See Google reviews for details',
+                        average_meal_price: (place.price_level || 1) * 20,
+                        distance: 'Within 5km',
+                        phone: place.formatted_phone_number || 'Not available',
+                        image_url: place.photos ? 
+                            `${API_CONFIG.GOOGLE_PLACES.BASE_URL}/photo?maxwidth=400&photoreference=${place.photos[0].photo_reference}&key=${API_CONFIG.GOOGLE_PLACES.API_KEY}` 
+                            : '/placeholder.jpg',
+                        google_place_id: place.place_id,
+                        review_count: place.user_ratings_total || 0,
+                        open_now: place.opening_hours?.open_now
+                    }));
+                    
+                    return {
+                        restaurants,
+                        search_params: { location, cuisine_type, price_range, date, party_size },
+                        source: 'google_places_api'
+                    };
+                }
+            }
+        } catch (error) {
+            console.error('Google Places API error:', error.message);
+        }
+    }
+    
+    // Fallback to mock data
+    console.log('Using mock restaurant data - configure Google Places API for real data');
     return {
         restaurants: [
             {
@@ -55,7 +125,7 @@ async function searchRestaurants(params) {
                 cuisine: cuisine_type || 'International',
                 location,
                 rating: 4.7,
-                price_range: '$$',
+                price_range: '$$$',
                 specialties: ['Seafood', 'Steaks', 'Vegetarian Options'],
                 atmosphere: 'Upscale Casual',
                 average_meal_price: 45,
@@ -67,38 +137,59 @@ async function searchRestaurants(params) {
                 cuisine: 'Local Cuisine',
                 location,
                 rating: 4.5,
-                price_range: '$',
+                price_range: '$$',
                 specialties: ['Traditional Dishes', 'Farm-to-Table', 'Craft Cocktails'],
                 atmosphere: 'Cozy & Intimate',
                 average_meal_price: 28,
                 distance: '0.8 km from city center'
-            },
-            {
-                id: 'REST003',
-                name: 'Rooftop Garden Restaurant',
-                cuisine: 'Modern Fusion',
-                location,
-                rating: 4.8,
-                price_range: '$$$',
-                specialties: ['Fusion Cuisine', 'Craft Cocktails', 'City Views'],
-                atmosphere: 'Trendy & Sophisticated',
-                average_meal_price: 65,
-                distance: '1.2 km from city center'
             }
         ],
-        search_params: { location, cuisine_type, price_range, date, party_size }
+        search_params: { location, cuisine_type, price_range, date, party_size },
+        source: 'mock_data'
     };
 }
 
 async function getRestaurantDetails(params) {
     const { restaurant_id } = params;
     
-    // Mock restaurant details
+    // For Google Places integration, we could fetch place details
+    if (API_CONFIG.GOOGLE_PLACES.API_KEY && restaurant_id.includes('google_')) {
+        try {
+            const placeId = restaurant_id.replace('google_', '');
+            const response = await axios.get(`${API_CONFIG.GOOGLE_PLACES.BASE_URL}/details/json`, {
+                params: {
+                    place_id: placeId,
+                    fields: 'name,formatted_address,formatted_phone_number,website,opening_hours,reviews,photos',
+                    key: API_CONFIG.GOOGLE_PLACES.API_KEY
+                }
+            });
+            
+            if (response.data.result) {
+                const place = response.data.result;
+                return {
+                    restaurant: {
+                        id: restaurant_id,
+                        name: place.name,
+                        description: place.reviews?.[0]?.text || 'No description available',
+                        address: place.formatted_address,
+                        phone: place.formatted_phone_number,
+                        website: place.website,
+                        hours: place.opening_hours?.weekday_text || {},
+                        reviews: place.reviews?.slice(0, 3) || []
+                    },
+                    source: 'google_places_api'
+                };
+            }
+        } catch (error) {
+            console.error('Google Places API error:', error.message);
+        }
+    }
+    
     return {
         restaurant: {
             id: restaurant_id,
             name: 'The Golden Spoon',
-            description: 'An elegant dining experience featuring fresh, locally-sourced ingredients and innovative culinary techniques.',
+            description: 'An elegant dining experience featuring fresh, locally-sourced ingredients.',
             hours: {
                 monday: '5:00 PM - 10:00 PM',
                 tuesday: '5:00 PM - 10:00 PM',
@@ -110,31 +201,25 @@ async function getRestaurantDetails(params) {
             },
             contact: {
                 phone: '+1-555-0456',
-                email: 'reservations@goldenspoon.com',
-                website: 'www.goldenspoon.com'
-            },
-            amenities: ['Outdoor Seating', 'Full Bar', 'Private Dining', 'Valet Parking'],
-            dress_code: 'Smart Casual',
-            reservation_policy: 'Reservations recommended, walk-ins welcome based on availability'
-        }
+                email: 'reservations@goldenspoon.com'
+            }
+        },
+        source: 'mock_data'
     };
 }
 
 async function makeReservation(params) {
-    const { restaurant_id, date, time, party_size, contact_info, special_requests } = params;
+    const { restaurant_id, date, time, party_size, special_requests } = params;
     
-    // Mock reservation confirmation
     return {
         reservation: {
-            confirmation_id: 'RES' + Math.random().toString(36).substr(2, 9).toUpperCase(),
+            confirmation_id: 'RES' + Math.random().toString(36).substring(2, 9).toUpperCase(),
             restaurant_id,
             date,
             time,
             party_size,
             status: 'confirmed',
-            special_requests: special_requests || 'None',
-            cancellation_policy: 'Free cancellation up to 2 hours before reservation time',
-            reminder: 'We will send a confirmation email and SMS reminder 2 hours before your reservation.'
+            special_requests: special_requests || 'None'
         }
     };
 }
@@ -142,7 +227,6 @@ async function makeReservation(params) {
 async function getMenu(params) {
     const { restaurant_id, meal_type = 'dinner' } = params;
     
-    // Mock menu
     return {
         menu: {
             restaurant_id,
@@ -151,24 +235,8 @@ async function getMenu(params) {
                 {
                     name: 'Appetizers',
                     items: [
-                        { name: 'Truffle Arancini', price: 14, description: 'Crispy risotto balls with truffle oil and parmesan' },
-                        { name: 'Seared Scallops', price: 18, description: 'Pan-seared scallops with cauliflower puree' },
-                        { name: 'Charcuterie Board', price: 22, description: 'Selection of artisanal meats and cheeses' }
-                    ]
-                },
-                {
-                    name: 'Main Courses',
-                    items: [
-                        { name: 'Grilled Salmon', price: 28, description: 'Atlantic salmon with seasonal vegetables' },
-                        { name: 'Ribeye Steak', price: 42, description: '12oz ribeye with garlic mashed potatoes' },
-                        { name: 'Vegetarian Pasta', price: 24, description: 'House-made pasta with seasonal vegetables' }
-                    ]
-                },
-                {
-                    name: 'Desserts',
-                    items: [
-                        { name: 'Chocolate Lava Cake', price: 12, description: 'Warm chocolate cake with vanilla ice cream' },
-                        { name: 'Tiramisu', price: 10, description: 'Classic Italian dessert with espresso' }
+                        { name: 'Truffle Arancini', price: 14, description: 'Crispy risotto balls' },
+                        { name: 'Seared Scallops', price: 18, description: 'Pan-seared with cauliflower puree' }
                     ]
                 }
             ]

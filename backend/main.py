@@ -5,7 +5,7 @@ import os
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
 from gemini_client import GeminiTravelAgent
-from mcp_manager import MCPManager
+from simple_mcp_manager import SimpleMCPManager
 
 load_dotenv()
 
@@ -21,8 +21,8 @@ async def lifespan(app: FastAPI):
     print("🚀 Starting AI Travel Agent...")
 
     try:
-        # Initialize MCP Manager
-        mcp_manager = MCPManager()
+        # Initialize Simple MCP Manager
+        mcp_manager = SimpleMCPManager()
         await mcp_manager.initialize_servers()
 
         # Initialize Gemini Travel Agent

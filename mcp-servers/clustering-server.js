@@ -1,5 +1,7 @@
 import express from 'express';
 import cors from 'cors';
+import axios from 'axios';
+import { API_CONFIG, validateApiKeys } from './config.js';
 
 const app = express();
 const port = process.argv[2] || 3005;
@@ -95,7 +97,79 @@ async function clusterItinerary(params) {
 async function optimizeRoute(params) {
     const { locations, start_point, preferences } = params;
     
-    // Mock route optimization
+    // Try Google Maps API for real route optimization
+    if (API_CONFIG.GOOGLE_MAPS.API_KEY && locations && locations.length > 1) {
+        try {
+            // Geocode locations first
+            const geocodedLocations = await Promise.all(
+                locations.map(async (location) => {
+                    const response = await axios.get(`${API_CONFIG.GOOGLE_MAPS.BASE_URL}/geocode/json`, {
+                        params: {
+                            address: location,
+                            key: API_CONFIG.GOOGLE_MAPS.API_KEY
+                        }
+                    });
+                    
+                    if (response.data.results.length > 0) {
+                        const result = response.data.results[0];
+                        return {
+                            name: location,
+                            lat: result.geometry.location.lat,
+                            lng: result.geometry.location.lng,
+                            formatted_address: result.formatted_address
+                        };
+                    }
+                    return { name: location, lat: null, lng: null };
+                })
+            );
+            
+            // Get directions between locations
+            const waypoints = geocodedLocations
+                .filter(loc => loc.lat && loc.lng)
+                .slice(1, -1) // Remove start and end points
+                .map(loc => `${loc.lat},${loc.lng}`)
+                .join('|');
+            
+            const startLoc = geocodedLocations[0];
+            const endLoc = geocodedLocations[geocodedLocations.length - 1];
+            
+            if (startLoc.lat && endLoc.lat) {
+                const directionsResponse = await axios.get(`${API_CONFIG.GOOGLE_MAPS.BASE_URL}/directions/json`, {
+                    params: {
+                        origin: `${startLoc.lat},${startLoc.lng}`,
+                        destination: `${endLoc.lat},${endLoc.lng}`,
+                        waypoints: waypoints,
+                        optimize: true,
+                        mode: preferences?.transport_mode || 'driving',
+                        key: API_CONFIG.GOOGLE_MAPS.API_KEY
+                    }
+                });
+                
+                if (directionsResponse.data.routes.length > 0) {
+                    const route = directionsResponse.data.routes[0];
+                    const optimizedRoute = route.legs.map((leg, index) => ({
+                        order: index + 1,
+                        location: index === 0 ? startLoc.name : geocodedLocations[route.waypoint_order[index - 1] + 1].name,
+                        travel_time: leg.duration.text,
+                        distance: leg.distance.text,
+                        method: preferences?.transport_mode || 'driving'
+                    }));
+                    
+                    return {
+                        optimized_route: optimizedRoute,
+                        total_travel_time: route.legs.reduce((total, leg) => total + leg.duration.value, 0) / 60 + ' minutes',
+                        total_distance: route.legs.reduce((total, leg) => total + leg.distance.value, 0) / 1000 + ' km',
+                        source: 'google_maps_api'
+                    };
+                }
+            }
+        } catch (error) {
+            console.error('Google Maps API error:', error.message);
+        }
+    }
+    
+    // Fallback to mock route optimization
+    console.log('Using mock route optimization - configure Google Maps API for real data');
     return {
         optimized_route: [
             { order: 1, location: 'Hotel', travel_time: '0 min', method: 'Start' },
@@ -106,12 +180,8 @@ async function optimizeRoute(params) {
             { order: 6, location: 'Hotel', travel_time: '20 min', method: 'Taxi' }
         ],
         total_travel_time: '65 minutes',
-        estimated_cost: 15, // Transit + taxi fare
-        carbon_footprint: 'Low - mostly walking and public transit',
-        alternative_routes: [
-            { name: 'All Walking Route', time: '95 minutes', cost: 0, notes: 'More exercise, scenic route' },
-            { name: 'Taxi Route', time: '35 minutes', cost: 45, notes: 'Fastest but most expensive' }
-        ]
+        estimated_cost: 15,
+        source: 'mock_data'
     };
 }
 

@@ -20,13 +20,16 @@ class MCPManager:
             {"name": "hotel-server", "file": "hotel-server.js"},
             {"name": "activity-server", "file": "activity-server.js"},
             {"name": "restaurant-server", "file": "restaurant-server.js"},
-            {"name": "clustering-server", "file": "clustering-server.js"}
+            {"name": "clustering-server", "file": "clustering-server.js"},
+            {"name": "search-server", "file": "search-server.js"}
         ]
 
         print(f"🔧 Starting {len(servers_to_start)} MCP servers...")
 
         for i, server in enumerate(servers_to_start):
             port = self.base_port + i
+            if server["name"] == "search-server":
+                port = 3006  # Special port for search server
             await self._start_server(server["name"], server["file"], port)
 
         # Wait for all servers to be ready
@@ -34,34 +37,80 @@ class MCPManager:
         print("✅ All MCP servers ready!")
 
     async def _start_server(self, name: str, file: str, port: int):
-        """Start individual MCP server"""
+        """Start individual MCP server or connect to existing one"""
+
+        # First check if server is already running on this port
+        self.servers[name] = {
+            "port": port,
+            "url": f"http://localhost:{port}",
+            "status": "checking"
+        }
+        
+        if await self._check_server_health(name):
+            print(f"✅ {name} already running on port {port}")
+            self.servers[name]["status"] = "ready"
+            return
 
         try:
-            # Start Node.js server process
+            # Start Node.js server process with environment variables
+            import os
+            env = os.environ.copy()
+            
+            # Check if the server file exists
+            server_path = f"../mcp-servers/{file}"
+            if not os.path.exists(server_path):
+                raise Exception(f"Server file not found: {server_path}")
+            
+            print(f"🔄 Starting {name} on port {port}...")
+            
             process = await asyncio.create_subprocess_exec(
-                "node", f"../mcp-servers/{file}", str(port),
+                "node", "-r", "dotenv/config", file, str(port),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd="."
+                cwd="../mcp-servers",
+                env=env
             )
 
             self.server_processes[name] = process
-            self.servers[name] = {
-                "port": port,
-                "url": f"http://localhost:{port}",
-                "status": "starting"
-            }
-
-            print(f"🔄 Started {name} on port {port}")
+            self.servers[name]["status"] = "starting"
+            
+            # Give the process a moment to start and check if it immediately fails
+            await asyncio.sleep(2)
+            if process.returncode is not None:
+                # Process has already exited
+                try:
+                    stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=3.0)
+                    stdout_text = stdout.decode() if stdout else ""
+                    stderr_text = stderr.decode() if stderr else ""
+                    
+                    # Check for common errors
+                    if "EADDRINUSE" in stderr_text:
+                        # Port already in use - check if existing server is working
+                        if await self._check_server_health(name):
+                            print(f"✅ {name} already running on port {port} (detected after startup attempt)")
+                            self.servers[name]["status"] = "ready"
+                            return
+                        else:
+                            error_msg = f"Port {port} in use but server not responding"
+                    else:
+                        error_msg = f"Exit code {process.returncode}"
+                        if stderr_text:
+                            error_msg += f" - {stderr_text.strip()[:200]}"  # Limit error message length
+                        if stdout_text:
+                            error_msg += f" - {stdout_text.strip()[:200]}"
+                    
+                    print(f"❌ {name} failed to start: {error_msg}")
+                except asyncio.TimeoutError:
+                    print(f"❌ {name} failed to start: Process communication timeout")
+                    error_msg = "Process communication timeout"
+                
+                self.servers[name]["status"] = "failed"
+                self.servers[name]["error"] = error_msg
 
         except Exception as e:
             print(f"❌ Failed to start {name}: {str(e)}")
-            self.servers[name] = {
-                "port": port,
-                "url": f"http://localhost:{port}",
-                "status": "failed",
-                "error": str(e)
-            }
+            self.servers[name]["status"] = "failed"
+            self.servers[name]["error"] = str(e)
 
     async def _wait_for_servers(self):
         """Wait for all servers to be ready"""
@@ -71,6 +120,8 @@ class MCPManager:
 
         for retry in range(max_retries):
             all_ready = True
+            failed_servers = []
+            starting_servers = []
 
             for name, server in self.servers.items():
                 if server["status"] == "starting":
@@ -79,15 +130,37 @@ class MCPManager:
                         print(f"✅ {name} is ready")
                     else:
                         all_ready = False
+                        starting_servers.append(name)
                 elif server["status"] == "failed":
                     all_ready = False
+                    failed_servers.append(name)
 
             if all_ready:
+                ready_count = len([s for s in self.servers.values() if s["status"] == "ready"])
+                print(f"✅ All {ready_count} MCP servers are ready!")
                 return
+
+            if retry == max_retries - 1:
+                if failed_servers:
+                    print(f"❌ Failed servers: {', '.join(failed_servers)}")
+                if starting_servers:
+                    print(f"⏳ Still starting: {', '.join(starting_servers)}")
 
             await asyncio.sleep(retry_delay)
 
-        print("⚠️  Some servers may not be fully ready")
+        # Final status report
+        ready_servers = [name for name, server in self.servers.items() if server["status"] == "ready"]
+        failed_servers = [name for name, server in self.servers.items() if server["status"] == "failed"]
+        
+        if ready_servers:
+            print(f"✅ Ready servers: {', '.join(ready_servers)}")
+        if failed_servers:
+            print(f"❌ Failed servers: {', '.join(failed_servers)}")
+            
+        if not ready_servers:
+            print("⚠️  No MCP servers are ready, but continuing anyway...")
+        else:
+            print(f"🎉 {len(ready_servers)} MCP servers are operational!")
 
     async def _check_server_health(self, name: str) -> bool:
         """Check if server is responding"""
@@ -97,7 +170,7 @@ class MCPManager:
             return False
 
         try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=2)) as session:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=3)) as session:
                 async with session.get(f"{server['url']}/health") as response:
                     return response.status == 200
         except:
