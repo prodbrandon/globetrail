@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react"
 import Globe from "react-globe.gl"
+import { AIRPORT_CITIES } from "@/lib/airport-cities"
 
 interface City {
     name: string
@@ -10,6 +11,8 @@ interface City {
     country: string
     color?: string
     roundTripMode?: boolean
+    iata?: string
+    continent?: string
 }
 
 interface Connection {
@@ -26,27 +29,59 @@ interface ReactGlobeEarthProps {
     onFlightSearch?: (locations: City[]) => void
 }
 
-// Major world cities data
-const CITIES: City[] = [
-    { name: "New York", lng: -74.006, lat: 40.7128, country: "USA" },
-    { name: "London", lng: -0.1276, lat: 51.5074, country: "UK" },
-    { name: "Tokyo", lng: 139.6503, lat: 35.6762, country: "Japan" },
-    { name: "Paris", lng: 2.3522, lat: 48.8566, country: "France" },
-    { name: "Sydney", lng: 151.2093, lat: -33.8688, country: "Australia" },
-    { name: "Dubai", lng: 55.2708, lat: 25.2048, country: "UAE" },
-    { name: "Los Angeles", lng: -118.2437, lat: 34.0522, country: "USA" },
-    { name: "Singapore", lng: 103.8198, lat: 1.3521, country: "Singapore" },
-    { name: "Hong Kong", lng: 114.1694, lat: 22.3193, country: "China" },
-    { name: "Mumbai", lng: 72.8777, lat: 19.076, country: "India" },
-    { name: "São Paulo", lng: -46.6333, lat: -23.5505, country: "Brazil" },
-    { name: "Cairo", lng: 31.2357, lat: 30.0444, country: "Egypt" },
-    { name: "Moscow", lng: 37.6173, lat: 55.7558, country: "Russia" },
-    { name: "Mexico City", lng: -99.1332, lat: 19.4326, country: "Mexico" },
-    { name: "Cape Town", lng: 18.4241, lat: -33.9249, country: "South Africa" },
-]
+// Convert airport cities to the City interface
+const CITIES: City[] = AIRPORT_CITIES.map(city => ({
+    name: city.name,
+    lng: city.lng,
+    lat: city.lat,
+    country: city.country,
+    iata: city.iata,
+    continent: city.continent
+}))
 
 const MAX_CONNECTIONS = 3
 const CONNECTION_COLORS = ["#00ff88", "#ff6b6b", "#ffd93d"]
+
+// Function to determine if it's day or night based on current time
+const isDayTime = (): boolean => {
+    const now = new Date()
+    const hour = now.getHours()
+    // Consider day time from 6 AM to 6 PM
+    return hour >= 6 && hour < 18
+}
+
+// Function to get appropriate globe texture and brightness
+const getGlobeSettings = () => {
+    const isDay = isDayTime()
+    return {
+        globeImageUrl: isDay
+            ? "//unpkg.com/three-globe/example/img/earth-blue-marble.jpg"
+            : "//unpkg.com/three-globe/example/img/earth-night.jpg",
+        atmosphereColor: isDay ? "#87CEEB" : "#ffffff",
+        atmosphereAltitude: isDay ? 0.15 : 0.1,
+        backgroundImageUrl: isDay
+            ? "//unpkg.com/three-globe/example/img/night-sky.png"
+            : "//unpkg.com/three-globe/example/img/night-sky.png"
+    }
+}
+
+// Function to format time for display
+const formatTime = (date: Date): string => {
+    return date.toLocaleTimeString('en-US', {
+        hour12: true,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+    })
+}
+
+// Function to get timezone information
+const getTimezoneInfo = (date: Date): string => {
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
+    const offset = -date.getTimezoneOffset() / 60
+    const offsetString = offset >= 0 ? `+${offset}` : `${offset}`
+    return `${timezone} (UTC${offsetString})`
+}
 
 export default function ReactGlobeEarth({ className = "", onFlightSearch }: ReactGlobeEarthProps) {
     const globeRef = useRef<any>()
@@ -58,6 +93,8 @@ export default function ReactGlobeEarth({ className = "", onFlightSearch }: Reac
     const [isLoading, setIsLoading] = useState(true)
     const [dimensions, setDimensions] = useState({ width: 800, height: 600 })
     const [roundTripMode, setRoundTripMode] = useState(false)
+    const [globeSettings, setGlobeSettings] = useState(getGlobeSettings())
+    const [currentTime, setCurrentTime] = useState(new Date())
 
     // Prepare cities data with colors based on selection state
     const citiesData = CITIES.map(city => {
@@ -75,12 +112,12 @@ export default function ReactGlobeEarth({ className = "", onFlightSearch }: Reac
         return {
             ...city,
             color,
-            size: (isSelected || isHovered || isConnected) ? 0.8 : 0.5
+            size: (isSelected || isHovered || isConnected) ? 0.4 : 0.15
         }
     })
 
     // Prepare arcs data for connections
-    const arcsData = connections.map((connection, index) => ({
+    const arcsData = connections.map((connection) => ({
         startLat: connection.from.lat,
         startLng: connection.from.lng,
         endLat: connection.to.lat,
@@ -206,6 +243,36 @@ export default function ReactGlobeEarth({ className = "", onFlightSearch }: Reac
         return () => clearTimeout(timer)
     }, [])
 
+    // Update globe settings based on time of day
+    useEffect(() => {
+        const updateGlobeSettings = () => {
+            setGlobeSettings(getGlobeSettings())
+        }
+
+        // Update immediately
+        updateGlobeSettings()
+
+        // Update every minute to catch day/night transitions
+        const interval = setInterval(updateGlobeSettings, 60000)
+
+        return () => clearInterval(interval)
+    }, [])
+
+    // Update current time every second
+    useEffect(() => {
+        const updateTime = () => {
+            setCurrentTime(new Date())
+        }
+
+        // Update immediately
+        updateTime()
+
+        // Update every second
+        const interval = setInterval(updateTime, 1000)
+
+        return () => clearInterval(interval)
+    }, [])
+
     // Handle container resize
     useEffect(() => {
         const updateDimensions = () => {
@@ -236,9 +303,9 @@ export default function ReactGlobeEarth({ className = "", onFlightSearch }: Reac
                 ref={globeRef}
                 width={dimensions.width}
                 height={dimensions.height}
-                globeImageUrl="//unpkg.com/three-globe/example/img/earth-night.jpg"
+                globeImageUrl={globeSettings.globeImageUrl}
                 bumpImageUrl="//unpkg.com/three-globe/example/img/earth-topology.png"
-                backgroundImageUrl="//unpkg.com/three-globe/example/img/night-sky.png"
+                backgroundImageUrl={globeSettings.backgroundImageUrl}
 
                 // Points (cities)
                 pointsData={citiesData}
@@ -248,14 +315,15 @@ export default function ReactGlobeEarth({ className = "", onFlightSearch }: Reac
                 pointLabel={(d: any) => `
           <div style="
             background: rgba(0,0,0,0.8); 
-            padding: 8px 12px; 
-            border-radius: 6px; 
+            padding: 6px 10px; 
+            border-radius: 4px; 
             color: white; 
-            font-size: 14px;
+            font-size: 12px;
             border: 1px solid ${d.color};
+            max-width: 200px;
           ">
             <strong>${d.name}</strong><br/>
-            ${d.country}
+            ${d.country}${d.iata ? ` (${d.iata})` : ''}
           </div>
         `}
                 onPointClick={handleCityClick}
@@ -271,8 +339,8 @@ export default function ReactGlobeEarth({ className = "", onFlightSearch }: Reac
                 arcAltitude={0.1}
 
                 // Globe settings
-                atmosphereColor="#ffffff"
-                atmosphereAltitude={0.1}
+                atmosphereColor={globeSettings.atmosphereColor}
+                atmosphereAltitude={globeSettings.atmosphereAltitude}
                 enablePointerInteraction={true}
 
                 // Animation settings
@@ -280,6 +348,25 @@ export default function ReactGlobeEarth({ className = "", onFlightSearch }: Reac
                 waitForGlobeReady={true}
 
             />
+
+            {/* Clock Display */}
+            <div className="absolute top-4 left-4 text-white px-3 py-2 rounded-md bg-black/60 backdrop-blur z-10 font-mono">
+                <div className="flex items-center gap-2 mb-1">
+                    <span className={`inline-block w-2 h-2 rounded-full ${isDayTime() ? 'bg-yellow-400' : 'bg-blue-400'}`}></span>
+                    <span className="text-lg font-bold">{formatTime(currentTime)}</span>
+                </div>
+                <div className="text-xs text-white/70">
+                    {getTimezoneInfo(currentTime)}
+                </div>
+                <div className="text-xs text-white/70 mt-1">
+                    {currentTime.toLocaleDateString('en-US', { 
+                        weekday: 'long', 
+                        year: 'numeric', 
+                        month: 'long', 
+                        day: 'numeric' 
+                    })}
+                </div>
+            </div>
 
             {/* Loading state */}
             {isLoading && (
@@ -294,7 +381,11 @@ export default function ReactGlobeEarth({ className = "", onFlightSearch }: Reac
             {/* Instructions */}
             <div className="absolute bottom-4 left-4 text-xs text-white/70 px-2 py-1 rounded-md bg-black/50 backdrop-blur z-10">
                 <div>Click cities to create {roundTripMode ? 'round-trip' : 'one-way'} connections ({connections.length}/{MAX_CONNECTIONS})</div>
-                <div className="mt-1">Drag to rotate • Scroll to zoom</div>
+                <div className="mt-1">Drag to rotate • Scroll to zoom • {CITIES.length} airports worldwide</div>
+                <div className="mt-1 flex items-center gap-1">
+                    <span className={`inline-block w-2 h-2 rounded-full ${isDayTime() ? 'bg-yellow-400' : 'bg-blue-400'}`}></span>
+                    {isDayTime() ? '☀️ Day Mode' : '🌙 Night Mode'}
+                </div>
             </div>
 
             {/* Controls */}
@@ -337,7 +428,7 @@ export default function ReactGlobeEarth({ className = "", onFlightSearch }: Reac
 
             {/* Connection Status - Only show when at max limit */}
             {connections.length >= MAX_CONNECTIONS && (
-                <div className="absolute top-4 left-4 text-sm text-white px-3 py-2 rounded-md bg-red-600/80 backdrop-blur z-10">
+                <div className="absolute top-24 left-4 text-sm text-white px-3 py-2 rounded-md bg-red-600/80 backdrop-blur z-10">
                     🚫 Maximum connections reached! Reset to start over.
                 </div>
             )}
@@ -347,7 +438,7 @@ export default function ReactGlobeEarth({ className = "", onFlightSearch }: Reac
                 <div className="absolute top-4 right-4 text-sm text-white max-w-64 z-10">
                     <div className="bg-green-600/80 backdrop-blur px-3 py-2 rounded-md">
                         <div className="font-semibold mb-1">Active Connections:</div>
-                        {connections.map((conn, index) => (
+                        {connections.map((conn) => (
                             <div key={conn.id} className="text-xs opacity-90">
                                 <span
                                     className="inline-block w-2 h-2 rounded-full mr-2"

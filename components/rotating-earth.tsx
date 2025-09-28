@@ -2,12 +2,15 @@
 
 import { useEffect, useRef, useState, useCallback } from "react"
 import * as d3 from "d3"
+import { AIRPORT_CITIES } from "@/lib/airport-cities"
 
 interface City {
   name: string
   lng: number
   lat: number
   country: string
+  iata?: string
+  continent?: string
 }
 
 interface Connection {
@@ -24,24 +27,15 @@ interface RotatingEarthProps {
   className?: string
 }
 
-// Major world cities data
-const CITIES: City[] = [
-  { name: "New York", lng: -74.006, lat: 40.7128, country: "USA" },
-  { name: "London", lng: -0.1276, lat: 51.5074, country: "UK" },
-  { name: "Tokyo", lng: 139.6503, lat: 35.6762, country: "Japan" },
-  { name: "Paris", lng: 2.3522, lat: 48.8566, country: "France" },
-  { name: "Sydney", lng: 151.2093, lat: -33.8688, country: "Australia" },
-  { name: "Dubai", lng: 55.2708, lat: 25.2048, country: "UAE" },
-  { name: "Los Angeles", lng: -118.2437, lat: 34.0522, country: "USA" },
-  { name: "Singapore", lng: 103.8198, lat: 1.3521, country: "Singapore" },
-  { name: "Hong Kong", lng: 114.1694, lat: 22.3193, country: "China" },
-  { name: "Mumbai", lng: 72.8777, lat: 19.076, country: "India" },
-  { name: "São Paulo", lng: -46.6333, lat: -23.5505, country: "Brazil" },
-  { name: "Cairo", lng: 31.2357, lat: 30.0444, country: "Egypt" },
-  { name: "Moscow", lng: 37.6173, lat: 55.7558, country: "Russia" },
-  { name: "Mexico City", lng: -99.1332, lat: 19.4326, country: "Mexico" },
-  { name: "Cape Town", lng: 18.4241, lat: -33.9249, country: "South Africa" },
-]
+// Convert airport cities to the City interface
+const CITIES: City[] = AIRPORT_CITIES.map(city => ({
+  name: city.name,
+  lng: city.lng,
+  lat: city.lat,
+  country: city.country,
+  iata: city.iata,
+  continent: city.continent
+}))
 
 const MAX_CONNECTIONS = 3
 
@@ -242,7 +236,7 @@ export default function RotatingEarth({ className = "" }: RotatingEarthProps) {
           const isHovered = hoveredCity?.name === city.name
           const isConnected = connectedCities.some(connected => connected.name === city.name)
 
-          const radius = (isSelected || isHovered || isConnected) ? 10 * scaleFactor : 6 * scaleFactor
+          const radius = (isSelected || isHovered || isConnected) ? 6 * scaleFactor : 2.5 * scaleFactor
 
           // Glow effect
           if (isSelected || isHovered || isConnected) {
@@ -299,7 +293,7 @@ export default function RotatingEarth({ className = "" }: RotatingEarthProps) {
   const getCityAtPosition = useCallback((mouseX: number, mouseY: number): City | null => {
     if (!projectionRef.current) return null
 
-    const cityRadius = 15
+    const cityRadius = 8 // Smaller click radius for smaller points
 
     for (const city of CITIES) {
       const projected = projectionRef.current([city.lng, city.lat])
@@ -579,7 +573,7 @@ export default function RotatingEarth({ className = "" }: RotatingEarthProps) {
       {/* Instructions */}
       <div className="absolute bottom-4 left-4 text-xs text-white/70 px-2 py-1 rounded-md bg-black/50 backdrop-blur">
         <div>Click cities to create connections ({connections.length}/{MAX_CONNECTIONS})</div>
-        <div className="mt-1">Drag to rotate • Scroll to zoom</div>
+        <div className="mt-1">Drag to rotate • Scroll to zoom • {CITIES.length} airports worldwide</div>
       </div>
 
       {/* Controls */}
