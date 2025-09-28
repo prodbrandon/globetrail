@@ -160,16 +160,22 @@ const ChatbotSection = forwardRef<ChatbotSectionRef>((props, ref) => {
   const handleFlightSearchFromGlobe = async (locations: City[]) => {
     if (locations.length < 2) return
 
+    // Calculate the date 30 days from now
+    const today = new Date()
+    const outboundDate = new Date(today)
+    outboundDate.setDate(today.getDate() + 30)
+    const formattedDate = outboundDate.toISOString().split('T')[0] // YYYY-MM-DD format
+
     // Create a natural language query from the selected locations
     const origin = locations[0]
     const destination = locations[locations.length - 1] // Use last selected as destination
-    
-    let flightQuery = `Find flights from ${origin.name} to ${destination.name}`
-    
+
+    let flightQuery = `Find flights from ${origin.name} to ${destination.name} departing ${formattedDate}`
+
     // If more than 2 locations, create a multi-city trip query
     if (locations.length > 2) {
       const intermediateStops = locations.slice(1, -1).map(city => city.name).join(', ')
-      flightQuery = `Multi-city trip: ${origin.name} → ${intermediateStops} → ${destination.name}`
+      flightQuery = `Multi-city trip: ${origin.name} → ${intermediateStops} → ${destination.name} departing ${formattedDate}`
     }
 
     // Add the query as a user message and trigger search
@@ -186,7 +192,7 @@ const ChatbotSection = forwardRef<ChatbotSectionRef>((props, ref) => {
     try {
       // Use the existing flight search logic
       const searchIntent = analyzeSearchIntent(flightQuery)
-      
+
       let flightsResult = null
       if (searchIntent.needsFlights) {
         const flightsResponse = await fetch('http://localhost:8000/api/flights/search', {

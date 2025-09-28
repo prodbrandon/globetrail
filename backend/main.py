@@ -393,7 +393,16 @@ async def parse_enhanced_travel_request(user_input: str) -> Dict[str, Any]:
     genai.configure(api_key=gemini_key)
     model = genai.GenerativeModel('gemini-2.5-flash')
 
+    # Get current date for context
+    current_date = datetime.now().strftime('%Y-%m-%d')
+    current_datetime = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    default_outbound = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d')
+    
     parse_prompt = f"""
+    Current date and time: {current_datetime}
+    Today's date: {current_date}
+    Default outbound date (30 days from today): {default_outbound}
+    
     Parse this travel request: "{user_input}"
 
     Extract these exact parameters:
@@ -415,7 +424,7 @@ async def parse_enhanced_travel_request(user_input: str) -> Dict[str, Any]:
     - destination_city: Full city name for Google Places (Tokyo, Paris, London, etc)
     - type: "1" for round-trip, "2" for one-way
     - return_date: null if one-way, calculate date if round-trip (default 7 days after outbound)
-    - outbound_date: use specified date or 30 days from today if not specified
+    - outbound_date: ALWAYS set to {default_outbound} (30 days from today)
     - adults: extract number or default 1
     - children: extract number or default 0
     - currency: always "USD"
@@ -456,7 +465,16 @@ async def parse_flight_request_with_locations(user_input: str, locations: list) 
     origin = locations[0]['name']
     destination = locations[-1]['name']
     
+    # Get current date for context
+    current_date = datetime.now().strftime('%Y-%m-%d')
+    current_datetime = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    default_outbound = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d')
+    
     parse_prompt = f"""
+    Current date and time: {current_datetime}
+    Today's date: {current_date}
+    Default outbound date (30 days from today): {default_outbound}
+    
     Parse this flight request with selected locations: "{user_input}"
     
     Selected locations from globe: {location_names}
@@ -481,7 +499,7 @@ async def parse_flight_request_with_locations(user_input: str, locations: list) 
     - Use common airport codes: LA/Los Angeles->LAX, Tokyo->NRT, NYC/New York->JFK, Paris->CDG, London->LHR, Boston->BOS, Dubai->DXB, Sydney->SYD, Singapore->SIN, Hong Kong->HKG, Mumbai->BOM, São Paulo->GRU, Cairo->CAI, Moscow->SVO, Mexico City->MEX, Cape Town->CPT
     - type: "1" for round-trip, "2" for one-way (default to round-trip unless specified)
     - return_date: null if one-way, calculate date if round-trip (default 7 days after outbound)
-    - outbound_date: use specified date or 30 days from today if not specified
+    - outbound_date: ALWAYS set to {default_outbound} (30 days from today)
     - adults: extract number or default 1
     - children: extract number or default 0
     - currency: always "USD" 
@@ -523,7 +541,16 @@ async def parse_flight_request(user_input: str) -> Dict[str, Any]:
     genai.configure(api_key=gemini_key)
     model = genai.GenerativeModel('gemini-2.5-flash')
 
+    # Get current date for context
+    current_date = datetime.now().strftime('%Y-%m-%d')
+    current_datetime = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    default_outbound = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d')
+    
     parse_prompt = f"""
+    Current date and time: {current_datetime}
+    Today's date: {current_date}
+    Default outbound date (30 days from today): {default_outbound}
+    
     Parse this flight request: "{user_input}"
 
     Extract these exact parameters for SERP API:
@@ -543,7 +570,7 @@ async def parse_flight_request(user_input: str) -> Dict[str, Any]:
     - departure_id/arrival_id: Convert cities to codes (LA->LAX, Tokyo->NRT, NYC->JFK, Paris->CDG, London->LHR, Boston->BOS)
     - type: "1" for round-trip, "2" for one-way
     - return_date: null if one-way, calculate date if round-trip (default 7 days after outbound)
-    - outbound_date: use specified date or 30 days from today if not specified
+    - outbound_date: ALWAYS set to {default_outbound} (30 days from today)
     - adults: extract number or default 1
     - children: extract number or default 0
     - currency: always "USD" 
@@ -750,12 +777,6 @@ async def search_flights(request: FlightSearchRequest):
             extracted_params = await parse_flight_request_with_locations(request.message, request.locations)
         else:
             extracted_params = await parse_flight_request(request.message)
-
-        # Step 1.5: Set default outbound_date if missing (30 days from now)
-        if not extracted_params.get('outbound_date'):
-            default_date = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d')
-            extracted_params['outbound_date'] = default_date
-            print(f"📅 Setting default outbound date to: {default_date}")
 
         # Step 2: Validate required parameters
         required_fields = ['departure_id', 'arrival_id', 'outbound_date']
