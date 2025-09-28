@@ -17,18 +17,8 @@ class GeminiTravelAgent:
             raise ValueError("GEMINI_API_KEY not found in environment")
 
         genai.configure(api_key=api_key)
-        # Try different model names that are available
-        try:
-            self.model = genai.GenerativeModel('gemini-pro')
-            print("✅ Gemini client initialized with gemini-pro")
-        except Exception as e:
-            try:
-                self.model = genai.GenerativeModel('gemini-1.5-flash')
-                print("✅ Gemini client initialized with gemini-1.5-flash")
-            except Exception as e2:
-                print(f"⚠️  Model initialization error: {e}, {e2}")
-                self.model = genai.GenerativeModel('gemini-pro')  # Fallback
-                print("✅ Gemini client initialized with fallback model")
+        self.model = genai.GenerativeModel('gemini-2.5-flash')
+        print("✅ Gemini client initialized")
 
     async def plan_trip(self, user_request: str) -> Dict[str, Any]:
         """Main trip planning function using Gemini + MCP servers"""
