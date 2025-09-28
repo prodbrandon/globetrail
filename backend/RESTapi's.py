@@ -908,10 +908,21 @@ async def search_hotels(request: HotelSearchRequest):
                 name = hotel['name']
                 rating = hotel.get('rating', 'N/A')
                 rate = hotel.get('rate_per_night', {}).get('lowest', 'N/A') if hotel.get('rate_per_night') else 'N/A'
+                booking_options = hotel.get('booking_options', [])
 
                 print(f"   {i}. {name}")
                 print(f"      Rating: {rating}")
                 print(f"      Rate per night: ${rate}" if rate != 'N/A' else f"      Rate per night: {rate}")
+
+                # Add booking links to console output
+                if booking_options:
+                    print(f"      Booking options: {len(booking_options)} available")
+                    for j, option in enumerate(booking_options[:2], 1):  # Show first 2 booking options
+                        source = option.get('source', 'Unknown')
+                        link = option.get('link', 'N/A')
+                        print(f"        {j}. {source}: {link}")
+                else:
+                    print(f"      Booking options: None available")
 
         return HotelSearchResponse(
             success=True,
@@ -973,4 +984,4 @@ if __name__ == "__main__":
     print("📖 API docs will be available at: http://localhost:8000/docs")
     print("🔧 Health check: http://localhost:8000/api/health")
 
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("RESTapi's:app", host="0.0.0.0", port=8000, reload=True)
